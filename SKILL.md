@@ -58,6 +58,12 @@ python scripts/backfill.py leads.csv --out backfill.json --brands "Deye,Sunsynk"
 python scripts/render_report.py leads_final.json --out report.html --title "英国光伏经销商线索 · Deye/Sunsynk 命中"
 ```
 
+3. 用本地 HTTP 服务打开报告，**不要 file:// 双击**——Chrome 会把 `file:` 页面当独立安全源，拦截官网/Google Maps 外链跳转（console 报 "file: URLs are treated as unique security origins"）：
+
+```bash
+python scripts/serve_report.py report.html
+```
+
 ## 反幻觉铁律
 
 - 不编造公司、邮箱、联系人、代理品牌、规模 —— 只写来源能验证的事实。
@@ -76,3 +82,4 @@ python scripts/render_report.py leads_final.json --out report.html --title "英�
 - `scripts/fetch_gmaps.py` — 抓取脚本
 - `scripts/backfill.py` — 背调脚本
 - `scripts/render_report.py` — 线索 HTML 报告生成器（读 `leads_final.json` → 自包含 HTML）
+- `scripts/serve_report.py` — 本地 HTTP 服务器打开报告（解决 file:// 拦截外链）
