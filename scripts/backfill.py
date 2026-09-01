@@ -55,8 +55,12 @@ def main():
     ap.add_argument("--proxy", default=DEFAULT_PROXY, help="代理地址（默认直连）")
     ap.add_argument("--max", type=int, default=0, help="最多背调条数 (0=全部)")
     ap.add_argument("--brands", default="", help="我方合作品牌，逗号分隔，如 'Deye,Sungrow'")
+    ap.add_argument("--fast", action="store_true", help="快速模式：只抓首页+品牌页找品牌，跳过 contact 页")
     args = ap.parse_args()
     brands = [b.strip() for b in (args.brands or "").split(",") if b.strip()]
+    contact_paths = [] if args.fast else CONTACT_PATHS
+    brand_paths = BRAND_PATHS[:2] if args.fast else BRAND_PATHS
+    home_sleep = 0.5 if args.fast else random.uniform(1, 2)
 
     leads = []
     with open(args.csv, encoding="utf-8-sig") as f:
@@ -97,7 +101,7 @@ def main():
                         page.wait_for_load_state("networkidle", timeout=6000)
                     except Exception:
                         pass
-                    time.sleep(random.uniform(1, 2))
+                    time.sleep(home_sleep)
                     rec["title"] = page.title()
                     rec["meta"] = page.evaluate(
                         "() => document.querySelector('meta[name=\"description\"]')?.content || ''"
@@ -108,7 +112,7 @@ def main():
                     rec["error"] = str(e)[:200]
 
                 # 联系方式页（找到邮箱即停）
-                for path in CONTACT_PATHS:
+                for path in contact_paths:
                     if rec["emails"]:
                         break
                     try:
@@ -129,7 +133,7 @@ def main():
 
                 # 品牌页（品牌未命中时再抓，命中即停）
                 if brands and not rec["brands_found"]:
-                    for path in BRAND_PATHS:
+                    for path in brand_paths:
                         if rec["brands_found"]:
                             break
                         try:
