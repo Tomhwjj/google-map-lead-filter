@@ -49,9 +49,14 @@ python scripts/backfill.py leads.csv --out backfill.json --brands "Deye,Sunsynk"
 
 按 `references/qualification-rules.md` 的评分表打分（产品30/渠道25/规模20/联系人15/活跃10），A级 80-100 / B级 50-79 / C级 0-49。
 
-### 第六步：输出表格
+### 第六步：输出表格 + UI 报告
 
-按 `templates/lead-table.md` 的 13 字段表格输出。
+1. 按 `templates/lead-table.md` 的 13 字段表格输出 markdown 表格（对话里给用户看）。
+2. 把评分结果写成 `leads_final.json`（字段见 `scripts/render_report.py` 顶部注释），生成可交互的 HTML 报告（A/B/C 筛选 + 评分条 + 官网/电话/邮箱/Google Maps 直达）：
+
+```bash
+python scripts/render_report.py leads_final.json --out report.html --title "英国光伏经销商线索 · Deye/Sunsynk 命中"
+```
 
 ## 反幻觉铁律
 
@@ -70,3 +75,4 @@ python scripts/backfill.py leads.csv --out backfill.json --brands "Deye,Sunsynk"
 - `templates/lead-table.md` — 输出表格模板
 - `scripts/fetch_gmaps.py` — 抓取脚本
 - `scripts/backfill.py` — 背调脚本
+- `scripts/render_report.py` — 线索 HTML 报告生成器（读 `leads_final.json` → 自包含 HTML）
