@@ -1,13 +1,13 @@
 ---
 name: google-map-lead-filter
-description: 多渠道外贸经销商线索挖掘与分级（Google Maps + Google Search + 品牌官网 + 展会名录 + 海关数据）。当用户要「找某产品在某国家/城市的经销商/批发商/进口商」、批量挖掘海外 B2B 客户线索、或把一批潜在客户按优先级分 A/B/C 级时触发。输入产品类目 + 目标国家/城市 + 客户类型（+ 我方合作品牌），输出 A/B/C 级线索表格 + 可交互 HTML 报告。默认多源为主，Google Maps 降级为补充源。
+description: 多渠道外贸经销商线索挖掘与分级（Google Maps + Google Search + 品牌官网 + 展会名录 + 海关数据）。当用户要「找某产品在某国家/城市的经销商/批发商/进口商」、批量挖掘海外 B2B 客户线索、或把一批潜在客户按优先级分 A/B/C 级时触发。输入产品类目 + 目标国家/城市 + 客户类型（+ 我方合作品牌），输出 A/B/C 级线索表格 + 可交互 HTML 报告。脚本批量抓取为主（Google Maps 批量 + 搜索 API 批量 + 列表页抓取），Claude 负责初筛背调评分分级。
 ---
 
 # 外贸经销商线索挖掘与分级（多源）
 
-多渠道挖掘海外 B2B 经销商线索：**Google Search / 品牌官网 / 展会名录 / 海关数据为主，Google Maps 补充**，然后抓取 → 初筛 → 背调 → 五维评分 → A/B/C 分级。
+多渠道挖掘海外 B2B 经销商线索：**脚本批量抓取为主**（Google Maps 批量 + 搜索 API 批量 + 列表页抓取），然后初筛 → 背调 → 五维评分 → A/B/C 分级。
 
-> ⚠️ **为什么多源为主**：Google Maps 对纯 B2B 批发商覆盖不足。英国实测：Google Maps 只挖到 8 条（4 经销商 + 3 安装商 + 1 竞品），而 Google Search 多挖出 8 条 Google Maps 漏掉的真实批发商（Segen UK、Menlo Electric、Powerland、E-Tech、GL-E、Phase、LAMPS、SolarVoxGreen）。分销渠道常被少数大批发商垄断，这些大鱼往往官网规模大、在 Google Maps 上标签是「能源设备供应商」而非「distributor」，靠单一地图源根本捞不到。
+> ⚠️ **为什么脚本批量为主**：手工 WebSearch 的天花板就是十几条——法国光伏公司实际 1377 家，手工只覆盖 1.3%。批量脚本一次出几百条：**Google Maps 批量抓安装商长尾**（法国 8 城市实测 301 条）+ **搜索 API 批量挖批发商大鱼**（分销渠道被少数大批发商垄断，这类大鱼在 Google Maps 标签是「能源设备供应商」而非「distributor」，靠搜索 API 命中）。两者互补，缺一不可。
 
 ## 输入
 
@@ -22,30 +22,44 @@ description: 多渠道外贸经销商线索挖掘与分级（Google Maps + Googl
 
 按 `references/search-keywords.md` 生成搜索词组合（产品 × 客户类型 × 城市，含本地语言词），同时生成多源搜索词（见 `references/multi-source.md`）。
 
-### 第二步：多源挖掘（主）
+### 第二步：多源批量挖掘
 
-按 `references/multi-source.md` 逐源挖线索，合并成 `leads_multisource.csv`：
-
-1. **Google Search 关键词挖掘**（零 API 成本，最有效）——用 WebSearch 搜品牌 + 国家 + distributor/wholesale/stockist 组合，命中即出线索。
-2. **品牌官网 Find-a-Distributor 名单**——Sunsynk/Deye 等品牌官网常有官方分销商查询页，直接列地区授权经销商。
-3. **展会名录**——行业展会（如 Solar & Storage Live UK）参展商名单，全是真实贸易商。
-4. **海关数据**（ImportYeti 等，免费额度）——查谁在向目标国进口我方品牌/品类。
-
-每源记录 `company_name / website / country / city / customer_type / source_url`，标注来源。
-
-### 第三步：Google Maps 补充（补充源）
-
-对搜索词跑抓取脚本，补 Google Maps 上遗漏的本地小批发商/安装商：
+**① 搜索 API 批量**（挖批发商大鱼）——用 `scripts/search_leads.py`（走 AnySearch 聚合搜索 API，零额外成本）：
 
 ```bash
-python scripts/fetch_gmaps.py "solar panel distributor Hamburg" --max 50 --out leads.csv
+python scripts/search_leads.py "grossiste photovoltaïque France" "Sungrow distributeur France" \
+    "installateur photovoltaïque Lyon" --language fr --out search.csv
+# 或从文件读几十个关键词
+python scripts/search_leads.py --queries-file keywords.txt --language fr --out search.csv
 ```
 
-脚本用 Playwright headless + 代理抓取，滚动加载，解析公司名/评分/电话/官网/Google Maps 链接，输出 CSV。**内置限速（2-3 秒延迟），勿改快。**
+**② 列表页抓取**（品牌 Find-a-Distributor 名单 + 展会名录）——用 `scripts/list_scraper.py`：
+
+```bash
+python scripts/list_scraper.py "https://brand.com/where-to-buy" "https://show.com/exhibitors" --out list.csv
+```
+
+搜索词按 `references/multi-source.md` 生成（增量口径：竞品品牌 + 不限品牌品类词）。⚠️ 列表页仅对静态 `<a>` 列表有效；JS 动态页（华为 find-distributor、tecsol 名录）用 **anysearch extract** 抓全文兜底（已验证 tecsol 名录 223 家供应商）。
+
+### 第三步：Google Maps 批量抓取（主力出量层，铺安装商长尾）
+
+对「产品 + 城市」关键词批量跑 `scripts/fetch_gmaps.py`，一次一个城市，铺开本地安装商/小批发商长尾：
+
+```bash
+for city in Lyon Marseille Bordeaux Toulouse; do
+  python scripts/fetch_gmaps.py "installateur photovoltaïque $city" --max 40 --out "fr_$city.csv"
+done
+```
+
+脚本用 Playwright headless + 代理抓取，滚动加载，解析公司名/评分/电话/官网/Google Maps 链接，输出 CSV。**内置限速（2-3 秒延迟），勿改快。** 这是出量主力：安装商在 Google Maps 是海量长尾，一个城市几十条、几个城市几百条。
 
 ### 第四步：合并去重
 
-多源 CSV + Google Maps CSV 按官网域名去重合并，得到 `leads_all.csv`。
+用 `scripts/merge_leads.py` 按官网域名去重合并（目录模式下文件名当城市标签）：
+
+```bash
+python scripts/merge_leads.py D:/tmp/fr_gmaps/ search.csv list.csv --out merged.csv
+```
 
 ### 第五步：初筛
 
@@ -98,7 +112,10 @@ python scripts/serve_report.py report.html
 - `references/brand-mapping.md` — 品牌贴牌 / 代工映射（背调 --brands 依据）
 - `references/compliance-rules.md` — 合规边界 / 限速 / 禁止行为
 - `templates/lead-table.md` — 输出表格模板
-- `scripts/fetch_gmaps.py` — Google Maps 抓取脚本
-- `scripts/backfill.py` — 背调脚本
+- `scripts/fetch_gmaps.py` — Google Maps 批量抓取脚本（铺安装商长尾，出量主力）
+- `scripts/search_leads.py` — 搜索 API 批量挖掘脚本（AnySearch，挖批发商大鱼）
+- `scripts/list_scraper.py` — 列表页抓取脚本（品牌经销商名单 / 展会名录）
+- `scripts/merge_leads.py` — 多源 CSV 合并去重脚本
+- `scripts/backfill.py` — 批量背调脚本（抓官网提取邮箱/品牌）
 - `scripts/render_report.py` — 线索 HTML 报告生成器（读 `leads_final.json` → 自包含 HTML）
 - `scripts/serve_report.py` — 本地 HTTP 服务器打开报告（解决 file:// 拦截外链）
