@@ -78,9 +78,15 @@ python scripts/backfill.py leads.csv --out backfill.json --brands "Deye,Sunsynk"
 2. 读 `backfill.json`，逐条判断：**品牌匹配（核心，`brands_found` 是否命中我方品牌）+ 上下文确认在销售而非仅提及**、渠道类型、公司规模、近期动态。官网抓不动时用 **kitesurf** 兜底抓该站；仍失败用 WebSearch 搜「公司名 + 品牌名 + distributor」找产品页/行业新闻证据（大鱼官网常 JS 重渲染，backfill 抓不到品牌，但 WebSearch 能确认命中）。
 3. 用 WebSearch 搜「公司名 + linkedin」补 LinkedIn 链接。
 
-### 第七步：五维评分 + 分级
+### 第七步：双模式评分 + 分级
 
-按 `references/qualification-rules.md` 的评分表打分（产品30/渠道25/规模20/联系人15/活跃10），A级 80-100 / B级 50-79 / C级 0-49。
+跑 `scripts/score_leads.py` 自动算两套评分（头部/长尾，各 100 分），生成 `sells_deye`、`score`/`grade`（头部）、`score_lt`/`grade_lt`（长尾）及每维度的评分依据：
+
+```bash
+python scripts/score_leads.py leads_final.json --out leads_scored.json
+```
+
+评分口径见 `references/qualification-rules.md`：头部模式 产品30/渠道25/规模20/触达15/活跃10；长尾模式 产品30/渠道20/规模5/触达20/活跃10/开发难度15（中＞小＞大）。A级 80-100 / B级 50-79 / C级 0-49。⚠️ 规模/活跃是背调时手工判断的（规模看员工数+覆盖，活跃看近期招聘/新闻/社媒/展会信号），批量未背调数据是占位默认值，别当真实分级。
 
 ### 第八步：输出表格 + UI 报告
 
