@@ -1,6 +1,19 @@
 # 多源挖掘方法
 
-Google Maps 覆盖不足时的补充/主力数据源。核心原则：**用品牌名 + 国家 + 渠道词去搜「谁在卖我方产品」，而不是搜「谁在卖这个品类」**。分销渠道被少数大批发商垄断，直接搜品牌名命中率远高于搜品类名。
+Google Maps 覆盖不足时的补充/主力数据源。
+
+## 核心口径：存量 vs 增量（先想清楚再搜）
+
+客户少不是挖得不够，是**口径错了**。两条搜索路线，价值天差地别：
+
+| 口径 | 搜什么 | 挖到的客户 | 价值 |
+|------|--------|-----------|------|
+| **存量** | `{我方品牌} distributor` | 已经在卖我方品牌的经销商 | 低——已有官方/大分销供货，切入=抢生意 |
+| **增量** | `{竞品品牌} distributor` + `solar wholesaler`（不限品牌） | 卖同品类但没卖我方品牌的批发商 | 高——现成渠道，pitch 引我方品牌补线 |
+
+**默认增量优先**：即使指定了品牌（如 Deye），也要搜竞品品牌（Growatt/Sungrow/Huawei/FoxESS/Solis/Sigenergy/GoodWe…）+ 不限品牌品类词（`solar wholesaler` / `PV Großhändler`）。这些批发商本身就是品类渠道大鱼，品牌只是「他们目前没卖我方品牌」的增量信号。
+
+**品牌是参数，不是目标**：技能定位是「找某品类的海外渠道」。没指定品牌时，增量口径就是主路线；指定了品牌，存量+增量都挖，增量为主。
 
 ## 1. Google Search 关键词挖掘（零 API，最有效）
 
@@ -15,6 +28,7 @@ Google Maps 覆盖不足时的补充/主力数据源。核心原则：**用品�
 | `{品牌} {国家} {城市}` | `Sunsynk London` | 本地渠道 |
 | `{品牌} trade supplier` | `Sunsynk trade supplier` | 贸易供应商 |
 | 竞品品牌替换（找增量机会） | `Growatt distributor UK` | 卖竞品的批发商，可 pitch 引 Deye 替换 |
+| 不限品牌品类批发商（增量主力） | `solar wholesaler {国家}` / `PV Großhändler` | 品类头部批发商，没卖我方品牌=增量机会（德国 BayWa/Krannich 靠这招挖出） |
 
 **产出**：每命中一条记 `company_name / website / country / city / customer_type / source_url`。
 

@@ -11,10 +11,10 @@ description: 多渠道外贸经销商线索挖掘与分级（Google Maps + Googl
 
 ## 输入
 
-- **产品类目**（如「光伏组件」「solar panel」）
+- **产品类目**（如「光伏组件」「solar panel」）——**这是核心输入，技能目标是「找某品类的海外渠道」，不是「找某品牌的经销商」**
 - **目标国家/城市**（如「德国 汉堡」「Netherlands」）
 - **客户类型**（distributor / wholesaler / importer）
-- **我方合作品牌**（如「Deye 德业」，用于背调判断官网是否在销售我方产品；含贴牌品牌，见 `references/brand-mapping.md`）
+- **我方合作品牌（可选）**（如「Deye 德业」，用于背调判断官网是否在销售我方产品；含贴牌品牌，见 `references/brand-mapping.md`）。**品牌不是必需的**：未指定品牌时，按「增量口径」挖竞品品牌 + 不限品牌的品类批发商，这批本身就是品类渠道大鱼。
 
 ## 执行流程
 
