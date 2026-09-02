@@ -17,8 +17,13 @@
 
 输入 JSON 每条字段：company_name, country, city, website, phone, email, facebook(可选),
     linkedin, customer_type, brands_found, score_detail(含"规模"/"活跃"旧值), reason 等。
+    ⚠️ 规模/活跃三态输入（可选，防幻觉）：
+      - employees(int)：员工数硬证据 → 直接按档位算规模
+      - active_signals(list)：活跃信号硬证据 → 按信号数算活跃
+      - backfilled(bool)：是否背调过。true=背调过(用旧值+「估」标注)；false/缺=未背调(未确认→中性分)
+      三者都缺时，规模/活跃落到「未确认中性分」(5/5)，不归零、不假装有判断。
 输出：在输入基础上新增 sells_deye、score(头部,重算)、grade(头部)、score_detail(头部)、
-    score_lt(长尾)、grade_lt(长尾)、score_detail_lt(长尾)。
+    score_basis(头部依据)、score_lt(长尾)、grade_lt(长尾)、score_detail_lt(长尾)、score_basis_lt(长尾依据)。
 """
 import argparse
 import json
@@ -93,8 +98,12 @@ def dev_score(old_scale, has_contact):
     return DEV_SCORES["big_contact"] if has_contact else DEV_SCORES["big_nocontact"]
 
 
-def scale_basis(scale):
-    """规模依据：员工数 + 覆盖范围 → 档位（0-20）。"""
+UNKNOWN_SCALE = 5   # 未确认规模中性分：信息缺失 ≠ 差，不归零不惩罚
+UNKNOWN_ACTIVE = 5  # 未确认活跃中性分
+
+
+def scale_band(scale):
+    """规模分 → 档位标签。"""
     if scale >= 18:
         return "大型 · 跨国/全国批发"
     if scale >= 13:
@@ -106,8 +115,8 @@ def scale_basis(scale):
     return "未确认"
 
 
-def active_basis(active):
-    """活跃依据：近期动态信号（招聘/新闻/社媒/展会），0-10。"""
+def active_band(active):
+    """活跃分 → 档位标签。"""
     if active >= 8:
         return "近6月有招聘/新闻/社媒/展会信号"
     if active >= 5:
@@ -115,6 +124,27 @@ def active_basis(active):
     if active >= 1:
         return "官网静态，无明显近期动态"
     return "未确认"
+
+
+def emp_to_scale(emp):
+    """员工数（硬证据）→ 规模分（0-20）。"""
+    if emp > 250:
+        return 20
+    if emp >= 50:
+        return 15
+    if emp >= 10:
+        return 10
+    return 5
+
+
+def signals_to_active(signals):
+    """活跃信号列表（硬证据）→ 活跃分（0-10）。"""
+    n = len([s for s in (signals or []) if s])
+    if n >= 2:
+        return 9
+    if n == 1:
+        return 6
+    return UNKNOWN_ACTIVE
 
 
 def contact_basis(phone, facebook, email):
@@ -126,6 +156,33 @@ def contact_basis(phone, facebook, email):
     if email:
         parts.append("邮箱")
     return "+".join(parts) if parts else "无联系方式"
+
+
+def read_scale(lead, old_scale):
+    """规模三态：证据(员工数) > 背调估 > 未确认(中性分)。返回 (分值, 依据)。"""
+    emp = lead.get("employees")
+    if isinstance(emp, int) and emp > 0:
+        val = emp_to_scale(emp)
+        return val, f"员工 {emp} 人 · {scale_band(val)}"
+    if lead.get("backfilled"):
+        if old_scale > 0:
+            return old_scale, scale_band(old_scale) + " · 估"
+        return UNKNOWN_SCALE, "未确认 · 官网无规模信息"
+    return UNKNOWN_SCALE, "未确认 · 未背调"
+
+
+def read_active(lead, old_active):
+    """活跃三态：证据(信号) > 背调估 > 未确认(中性分)。返回 (分值, 依据)。"""
+    sig = lead.get("active_signals")
+    if sig:
+        n = len([s for s in sig if s])
+        val = signals_to_active(sig)
+        return val, f"{n} 个活跃信号 · {active_band(val)}"
+    if lead.get("backfilled"):
+        if old_active > 0:
+            return old_active, active_band(old_active) + " · 估"
+        return UNKNOWN_ACTIVE, "未确认 · 官网无动态信息"
+    return UNKNOWN_ACTIVE, "未确认 · 未背调"
 
 
 def score_lead(lead):
@@ -146,14 +203,12 @@ def score_lead(lead):
                  ("卖竞品·增量" if brands else "品类相关")
     ch_basis = {"distributor": "批发/分销商", "installer": "安装商/零售商", "retail": "零售"}[ch]
     cont_basis = contact_basis(phone, facebook, email)
-    scale_b = scale_basis(old_scale)
-    active_b = active_basis(old_active)
+    scale_h, scale_b = read_scale(lead, old_scale)
+    active_h, active_b = read_active(lead, old_active)
 
     # --- 头部模式 ---
     chan_h = CHANNEL_HEAD[ch]
-    scale_h = old_scale
     cont_h = contact_score(phone, facebook, email, CONTACT_HEAD)
-    active_h = old_active
     score_h = prod + chan_h + scale_h + cont_h + active_h
     detail_h = {"产品匹配": prod, "渠道": chan_h, "规模": scale_h,
                 "触达": cont_h, "活跃": active_h}
@@ -162,21 +217,20 @@ def score_lead(lead):
 
     # --- 长尾模式 ---
     chan_t = CHANNEL_TAIL[ch]
-    scale_t = round(old_scale * 5 / 20)
+    scale_t = round(scale_h * 5 / 20)
     cont_t = contact_score(phone, facebook, email, CONTACT_TAIL)
-    active_t = old_active
-    dev_t = dev_score(old_scale, has_contact)
-    if DEV_MID[0] <= old_scale <= DEV_MID[1]:
+    dev_t = dev_score(scale_h, has_contact)
+    if DEV_MID[0] <= scale_h <= DEV_MID[1]:
         dev_key = "mid"
-    elif old_scale < DEV_MID[0]:
+    elif scale_h < DEV_MID[0]:
         dev_key = "small"
     else:
         dev_key = "big_contact" if has_contact else "big_nocontact"
     dev_basis = {"mid": "中型 · 最好开发", "small": "小型 · 可开发",
                  "big_contact": "大型 · 有联系方式", "big_nocontact": "大型 · 无联系方式 · 难"}[dev_key]
-    score_t = prod + chan_t + scale_t + cont_t + active_t + dev_t
+    score_t = prod + chan_t + scale_t + cont_t + active_h + dev_t
     detail_t = {"产品匹配": prod, "渠道": chan_t, "规模": scale_t,
-                "触达": cont_t, "活跃": active_t, "开发难度": dev_t}
+                "触达": cont_t, "活跃": active_h, "开发难度": dev_t}
     basis_t = {"产品匹配": prod_basis, "渠道": ch_basis, "规模": scale_b,
                "触达": cont_basis, "活跃": active_b, "开发难度": dev_basis}
 

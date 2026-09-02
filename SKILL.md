@@ -86,16 +86,29 @@ python scripts/backfill.py leads.csv --out backfill.json --brands "Deye,Sunsynk"
 python scripts/score_leads.py leads_final.json --out leads_scored.json
 ```
 
-评分口径见 `references/qualification-rules.md`：头部模式 产品30/渠道25/规模20/触达15/活跃10；长尾模式 产品30/渠道20/规模5/触达20/活跃10/开发难度15（中＞小＞大）。A级 80-100 / B级 50-79 / C级 0-49。⚠️ 规模/活跃是背调时手工判断的（规模看员工数+覆盖，活跃看近期招聘/新闻/社媒/展会信号），批量未背调数据是占位默认值，别当真实分级。
+评分口径见 `references/qualification-rules.md`：头部模式 产品30/渠道25/规模20/触达15/活跃10；长尾模式 产品30/渠道20/规模5/触达20/活跃10/开发难度15（中＞小＞大）。A级 80-100 / B级 50-79 / C级 0-49。⚠️ **规模/活跃三态防幻觉**：只有硬证据（`employees` 员工数 / `active_signals` 活跃信号）才给确定档位；否则标「估」（背调过但无硬证据）或「未确认 → 中性分 5」（未背调，`backfilled=false`）——**不归零、不把批量占位默认值包装成确定判断**。
 
 ### 第八步：输出表格 + UI 报告
 
 1. 按 `templates/lead-table.md` 的 13 字段表格输出 markdown 表格（对话里给用户看）。
-2. 把评分结果写成 `leads_final.json`（字段见 `scripts/render_report.py` 顶部注释），生成可交互的 HTML 报告（A/B/C 筛选 + 评分条 + 官网/电话/邮箱/Google Maps 直达）：
+2. 把评分结果写成 `leads_final.json`（字段见 `scripts/render_report.py` 顶部注释），生成可交互的 HTML 报告：
 
 ```bash
 python scripts/render_report.py leads_final.json --out report.html --title "英国光伏经销商线索 · Deye/Sunsynk 命中"
 ```
+
+**UI 报告规格**（`render_report.py` 已实现，以下 8 要素必须全部具备，缺一不可）：
+
+1. **双评分模式切换** —— 顶部两按钮「头部模式（啃大客户）/ 长尾模式（铺小客户）」，切换后卡片分数/分级/维度条/排序/统计栏全部按当前模式重算。
+2. **评分规则图例** —— 可折叠 `<details>`，列 6 维度给分依据（产品30 / 渠道25·20 / 规模20·5 / 触达15·20 / 活跃10 / 开发难度15）。
+3. **每卡评分依据** —— 每个维度条后跟「依据」小字，三态标注：`证据`（员工数/活跃信号）→ 按档位；`估`（背调过无硬证据）→ 档位+「估」；`未确认`（未背调）→ 中性分 5 +「未确认·未背调」。
+4. **卖 Deye 标志** —— `sells_deye=true` 卡片顶部绿色「✓ Deye」badge。
+5. **联系人触达排序** —— 电话（📞 前置，`tel:` 链接）→ WhatsApp（`wa.me` 绿标）→ 官网 → 邮箱（`mailto:`）→ LinkedIn → Google Maps。
+6. **导出 CSV 按钮** —— 客户端 Blob 下载，UTF-8 BOM（Excel 兼容），文件名 `leads_{当前模式}.csv`，导出当前筛选可见的卡片。
+7. **A/B/C 筛选** —— 全部/A/B/C 按钮，按当前模式分级过滤。
+8. **统计栏** —— 线索总数 / A级数 / B级数 / 卖Deye数（随模式切换更新）。
+
+**电话转 WhatsApp**（落地「电话是可加 WhatsApp 的获客主路径」）：`wa_link()` 把法国本地 10 位号去前导 0 补 `33`（其它 10 位号也补 33），生成 `wa.me` 链接。
 
 3. 用本地 HTTP 服务打开报告，**不要 file:// 双击**——Chrome 会把 `file:` 页面当独立安全源，拦截官网/Google Maps 外链跳转（console 报 "file: URLs are treated as unique security origins"）：
 

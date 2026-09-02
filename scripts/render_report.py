@@ -209,11 +209,12 @@ def render(leads, title):
     <div class="legend-grid">
       <div class="legend-item"><b>产品匹配 30</b><br><span>已卖Deye=30（存量） · 卖竞品=27（增量） · 品类相关=24</span></div>
       <div class="legend-item"><b>渠道 25/20</b><br><span>批发/分销商 &gt; 安装商/零售商 &gt; 零售</span></div>
-      <div class="legend-item"><b>规模 20/5</b><br><span>员工数+覆盖：大型≥18 · 中大型13-17 · 中型6-12 · 小型1-5 · 未确认0</span></div>
+      <div class="legend-item"><b>规模 20/5</b><br><span>员工数+覆盖：大型≥18 · 中大型13-17 · 中型6-12 · 小型1-5 · 未确认中性5</span></div>
       <div class="legend-item"><b>触达 15/20</b><br><span>电话(可加WhatsApp) 8/12 &gt; Facebook 4/5 &gt; 邮箱3（底线）</span></div>
-      <div class="legend-item"><b>活跃 10</b><br><span>近6月招聘/新闻/社媒/展会 8-10 · 近1年更新 5-7 · 静态 1-4</span></div>
+      <div class="legend-item"><b>活跃 10</b><br><span>近6月招聘/新闻/社媒/展会 8-10 · 近1年更新 5-7 · 静态 1-4 · 未确认中性5</span></div>
       <div class="legend-item"><b>开发难度 15（仅长尾）</b><br><span>中型最好开发 15 &gt; 小型 9 &gt; 大型（有联系方式4/无0）</span></div>
     </div>
+    <p style="margin-top:10px;font-size:12.5px;color:#64748b">⚠️ 规模/活跃三态防幻觉：<b>有证据</b>(员工数/活跃信号) → 按档位 · <b>估</b>(背调过但无硬证据) → 标「估」 · <b>未确认</b>(未背调) → 给中性分5、不归零不假装判断。</p>
   </details>
   <div class="stats">
     <div class="stat"><div class="num">{total}</div><div class="lbl">线索总数</div></div>
