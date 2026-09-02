@@ -61,6 +61,8 @@ done
 python scripts/merge_leads.py D:/tmp/fr_gmaps/ search.csv list.csv --out merged.csv
 ```
 
+> ⚠️ **保留高分版**：多源（手工背调 / gmaps 批量 / 搜索 API）合并时，同一公司（同域名）会出多条记录。手工背调的高分版（带邮箱/联系人/品牌命中）常被 gmaps 低分版覆盖——法国实测 BayWa 95A→68B、POwR 90A→68B 就是教训。合并后必须按 domain 对照，**同域名保留 score 最高（或字段最全）的那条**，低分重复删掉，别让精调成果被批量版冲掉。
+
 ### 第五步：初筛
 
 读 CSV，按 `references/qualification-rules.md` 的初筛规则淘汰：广告(Sponsored)、纯零售/建材超市、非目标行业、无官网无电话、黄页伪官网。

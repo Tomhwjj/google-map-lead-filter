@@ -34,6 +34,13 @@ Google Maps 覆盖不足时的补充/主力数据源。
 
 **背调要求**：搜索结果标题说「distributor」不等于真分销商，必须进官网确认（跑 backfill 或 WebSearch 产品页），证据写进 reason。
 
+**⚠️ 品牌词歧义（2026-09 法国实测教训）**：品牌缩写可能撞上完全不同的行业/公司，搜索 API 结果噪声极高：
+- `Solis` 撞上印度「Solis 拖拉机」（法国农机经销商 Eurotrac / Groupe Rullier / VSM 分销的是拖拉机，不是 Solis 逆变器）
+- `Fox` 撞上 Fox News / FOXA 股票 / Michael J. Fox 基金会（不是 FoxESS）
+- `GoodWe` 撞上酒店招聘 / Yelp / 无关资讯
+
+**对策**：品牌词必须带品类限定词，如 `Solis onduleur France`（不是 `Solis France`）、`FoxESS distributeur`（不是 `Fox`）；搜索 API 结果先按域名噪声表过滤（social/news/招聘/电商/黄页），剩下候选再进官网背调精判，不能凭标题/摘要就认定。
+
 ## 2. 品牌官网 Find-a-Distributor 名单
 
 品牌官网常有官方渠道查询页，直接列地区授权经销商，是最干净的线索源：
