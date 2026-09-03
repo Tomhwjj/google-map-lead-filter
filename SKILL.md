@@ -84,7 +84,7 @@ python scripts/merge_leads.py D:/tmp/fr_gmaps/ search.csv list.csv --out merged.
 python scripts/backfill.py leads.csv --out backfill.json --brands "Deye,Sunsynk"
 ```
 
-2. 读 `backfill.json`，逐条判断：**品牌匹配（核心，`brands_found` 是否命中我方品牌）+ 上下文确认在销售而非仅提及**、渠道类型、公司规模、近期动态。官网抓不动时用 **kitesurf** 兜底抓该站；仍失败用 WebSearch 搜「公司名 + 品牌名 + distributor」找产品页/行业新闻证据（大鱼官网常 JS 重渲染，backfill 抓不到品牌，但 WebSearch 能确认命中）。
+2. 读 `backfill.json`，逐条判断：**品牌匹配（核心，`brands_found` 是否命中我方品牌）+ 上下文确认在销售而非仅提及**、渠道类型、公司规模、近期动态。优先读 body 判品牌/规模；官网抓不动用 **kitesurf** 兜底；品牌/规模证据缺失用 **anysearch（批量）/ WebSearch（零星）** 搜「公司名 + 品牌名 + distributor」或「公司名 + wholesale/warehouse/about」补证据（兜底分工见 `references/qualification-rules.md`）。
 3. 用 WebSearch 搜「公司名 + linkedin」补 LinkedIn 链接。
 
 ### 第七步：双模式评分 + 分级

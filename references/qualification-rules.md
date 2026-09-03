@@ -45,13 +45,22 @@ Claude 读 `backfill.json`，按优先级判断：
 
 > ⚠️ `brands_found` 命中只是「提到该品牌」，要结合 `brands_context` 上下文判断是「作为经销商在销售」还是「作为竞品被提及」。判断不了标「未确认」。
 
-### 兜底：kitesurf
+### 兜底：官网拿不到品牌 / 规模证据时
 
-个别官网 playwright 抓不动（JS 渲染/反爬）时，Claude 现场用 **kitesurf** 抓该官网转 Markdown，再判断。
+背调先读 `backfill.json` 的 body 判品牌/规模（**零额外成本，数据已在手，优先读**）。只有 body 空、官网抓失败、品牌未命中、规模自述缺失时，才逐级兜底：
 
-### LinkedIn
+| 缺失项 | 兜底手段 | 说明 |
+|-------|---------|------|
+| 官网抓不动（JS 重渲染 / 反爬） | **kitesurf** | 抓该官网转 Markdown 再判断 |
+| 品牌证据缺失 | **anysearch / WebSearch** | 搜「公司名 + 品牌名 + distributor」，找产品页/行业新闻证据 |
+| 规模证据缺失（About 页没自述） | **anysearch / WebSearch** | 搜「公司名 + wholesale / warehouse / importer / about」，找规模自述 |
+| LinkedIn 链接 | **WebSearch** | 搜「公司名 + linkedin」（脚本抓易撞登录墙） |
 
-用 WebSearch 搜「公司名 + linkedin」补 LinkedIn 链接（脚本抓 LinkedIn 易撞登录墙，不划算）。
+**anysearch vs WebSearch 分工**：
+- **批量**（几十条线索一起补证据）→ 用 **anysearch**（`anysearch extract` 有正文提取，一次拿干净正文，比 WebSearch 摘要 + 二次 WebFetch 省 token）
+- **零星**（1-2 条）→ 用 **WebSearch**（够用，无需额外 key）
+
+> ⚠️ 兜底搜到的证据同样要落到 `source_url`；判断不了仍标「未确认」，不脑补。
 
 ## 三、双模式评分（各总分 100）
 
