@@ -11,7 +11,7 @@ description: 多渠道外贸经销商线索挖掘与分级（Google Maps + Googl
 
 ## 输入
 
-- **产品类目**（如「光伏组件」「solar panel」）——**这是核心输入，技能目标是「找某品类的海外渠道」，不是「找某品牌的经销商」**
+- **产品类目**（如「储能逆变器」「hybrid inverter / battery storage」）——**这是核心输入，技能目标是「找某品类的海外渠道」，不是「找某品牌的经销商」**。⚠️ 品类走储能优先（Deye 是储能逆变器玩家，见 `references/search-keywords.md`）
 - **目标国家/城市**（如「德国 汉堡」「Netherlands」）——**仅欧盟国家，英国不在范围**（见 `references/deye-ecosystem.md`）
 - **客户类型**（distributor / wholesaler / importer）
 - **我方合作品牌（可选）**（如「Deye 德业」，用于背调判断官网是否在销售我方产品；含贴牌品牌，见 `references/brand-mapping.md`）。**品牌不是必需的**：未指定品牌时，按「增量口径」挖竞品品牌 + 不限品牌的品类批发商，这批本身就是品类渠道大鱼。
