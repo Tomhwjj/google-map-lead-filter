@@ -102,3 +102,6 @@ Deye 卡在「储能 hybrid 逆变器 + 电池」位，其欧洲渠道是**储�
 - [Menlo Electric Deye EU distributor](https://www.pvtime.org/menlo-electric-becomes-one-of-the-largest-deye-inverters-distributor-in-eu/)
 - [Eastech Electric Deye España](https://www.solarnews.es/2022/10/11/eastech-electric-sau-importador-distribuidor-oficial-de-deye-inverter-en-espana/)
 - [Deye Distributor Directory](https://deyeinverters.net/)
+- [Noark inverters are rebadged Deye units](https://www.solarquotes.com.au/inverters/noark-review.html)
+- [Deye rebrand variants: INGE, Sunsynk, OHm, Sol-Ark](https://powerforum.co.za/topic/5991-is-there-a-link-between-the-inge-sunsynk/)
+- [Fusion is a rebranded Deye sold by Solaradvice](https://powerforum.co.za/topic/9244-sunsynk-who-is-the-oem/)
