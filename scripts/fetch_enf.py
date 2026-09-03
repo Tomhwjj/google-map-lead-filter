@@ -20,7 +20,7 @@ Deye/Sunsynk 的商户。本脚本把 pv-company-scraper（D:\\Agent\\git\\pv-co
     address, profile_url, source_url
   - customer_type: ENF seller -> distributor（经销商），installer 保持 installer
     （⚠️ 评分脚本的渠道关键词不含 "seller"，不映射会被判成 retail 零分）
-  - 只抓欧盟 27 国；英国/瑞士/挪威/乌克兰/塞尔维亚等非欧盟自动拒绝
+  - 只抓目标市场（欧盟 27 国 + 乌克兰）；英国/瑞士/挪威/塞尔维亚等非欧盟自动拒绝
 """
 import argparse
 import csv
@@ -34,14 +34,16 @@ from selectolax.parser import HTMLParser
 
 BASE_URL = "https://www.enfsolar.com"
 
-# 欧盟 27 国 -> ENF 目录 slug（不含英国 GB/瑞士 CH/挪威 NO/乌克兰 UA/塞尔维亚 RS）
-EU27_SLUGS = {
+# 目标市场 -> ENF 目录 slug：欧盟 27 国 + 乌克兰（用户指定追加，战后储能需求）
+# 不含：英国 GB / 瑞士 CH / 挪威 NO / 塞尔维亚 RS
+TARGET_SLUGS = {
     "AT": "Austria", "BE": "Belgium", "BG": "Bulgaria", "HR": "Croatia",
     "CZ": "Czech", "DK": "Denmark", "EE": "Estonia", "FI": "Finland",
     "FR": "France", "DE": "Germany", "GR": "Greece", "HU": "Hungary",
     "IE": "Ireland", "IT": "Italy", "LV": "Latvia", "LT": "Lithuania",
     "LU": "Luxembourg", "NL": "Netherlands", "PL": "Poland", "PT": "Portugal",
     "RO": "Romania", "SK": "Slovakia", "SI": "Slovenia", "ES": "Spain", "SE": "Sweden",
+    "UA": "Ukraine",
 }
 
 # ENF 分类 -> 我方 customer_type（seller 是 ENF 对「经销商/销售商」的叫法）
@@ -181,7 +183,7 @@ def parse_profile(html, url, country, customer_type):
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description="抓取 ENF Solar 企业目录 -> 线索 CSV")
-    ap.add_argument("--country", default="DE", help="欧盟 2 字母代码，逗号分隔，如 DE,FR,NL")
+    ap.add_argument("--country", default="DE", help="目标市场 2 字母代码（欧盟27国+乌克兰），逗号分隔，如 DE,FR,UA")
     ap.add_argument("--category", default="seller", help="seller/installer，逗号分隔")
     ap.add_argument("--max", type=int, default=50, help="最多抓详情页条数 (0=全部)")
     ap.add_argument("--max-pages", type=int, default=0, help="每个组合最多翻页数 (0=全部)")
@@ -194,8 +196,8 @@ def main():
     categories = [c.strip().lower() for c in args.category.split(",") if c.strip()]
 
     for c in countries:
-        if c not in EU27_SLUGS:
-            print(f"❌ 非欧盟国家 {c} 拒绝（只做欧盟 27 国）", file=sys.stderr)
+        if c not in TARGET_SLUGS:
+            print(f"❌ 不在目标市场 {c}（只做欧盟 27 国 + 乌克兰）", file=sys.stderr)
             sys.exit(1)
     for cat in categories:
         if cat not in CATEGORY_MAP:
@@ -210,7 +212,7 @@ def main():
         ctype = CATEGORY_MAP[cat]
         path = CATEGORY_PATHS[cat]
         for code in countries:
-            slug = EU27_SLUGS[code]
+            slug = TARGET_SLUGS[code]
             # 收集列表页的公司链接（翻页）
             company_urls = []
             page = 1

@@ -12,7 +12,7 @@ description: 多渠道外贸经销商线索挖掘与分级（Google Maps + Googl
 ## 输入
 
 - **产品类目**（如「储能逆变器」「hybrid inverter / battery storage」）——**这是核心输入，技能目标是「找某品类的海外渠道」，不是「找某品牌的经销商」**。⚠️ 品类走储能优先（Deye 是储能逆变器玩家，见 `references/search-keywords.md`）
-- **目标国家/城市**（如「德国 汉堡」「Netherlands」）——**仅欧盟国家，英国不在范围**（见 `references/deye-ecosystem.md`）
+- **目标国家/城市**（如「德国 汉堡」「Netherlands」）——**欧盟 27 国 + 乌克兰**（见 `references/deye-ecosystem.md`）
 - **客户类型**（distributor / wholesaler / importer）
 - **我方合作品牌（可选）**（如「Deye 德业」，用于背调判断官网是否在销售我方产品；含贴牌品牌，见 `references/brand-mapping.md`）。**品牌不是必需的**：未指定品牌时，按「增量口径」挖竞品品牌 + 不限品牌的品类批发商，这批本身就是品类渠道大鱼。
 
@@ -45,7 +45,7 @@ python scripts/list_scraper.py "https://brand.com/where-to-buy" "https://show.co
 python scripts/fetch_enf.py --country DE,FR,NL --category seller --max 200 --out enf.csv
 ```
 
-ENF 的 seller=经销商（脚本已映射 distributor）、installer=安装商；邮箱是 JS 混淆，脚本内置解码；只抓欧盟 27 国。
+ENF 的 seller=经销商（脚本已映射 distributor）、installer=安装商；邮箱是 JS 混淆，脚本内置解码；只抓欧盟 27 国 + 乌克兰。
 
 搜索词按 `references/multi-source.md` 生成（增量口径：竞品品牌 + 不限品牌品类词）。⚠️ 列表页仅对静态 `<a>` 列表有效；JS 动态页（华为 find-distributor、tecsol 名录）用 **anysearch extract** 抓全文兜底（已验证 tecsol 名录 223 家供应商）。
 

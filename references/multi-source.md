@@ -4,9 +4,10 @@
 
 ## 市场边界（铁律）
 
-- **只做欧洲（欧盟 27 国）**，英国不在范围内（英国已脱欧，非欧盟）。
+- **只做欧洲：欧盟 27 国 + 乌克兰**。英国不在范围（已脱欧）；瑞士/挪威/塞尔维亚等非欧盟也不做。
+- 乌克兰：候选国未入盟，但**用户指定追加**（战后储能/重建需求大），纳入目标市场。
 - 美国（Sol-Ark 市场）不做，Sol-Ark 贴牌仅用于识别同源产品。
-- 英国、南非、北美等非欧盟市场一律不挖。
+- 英国、瑞士、挪威、塞尔维亚、南非、北美等一律不挖。
 
 ## 核心口径：存量 vs 增量（先想清楚再搜）
 
@@ -43,7 +44,7 @@
 - 产品分类：组件 / **逆变器** / **储能系统**——直接对应 Deye 品类。
 - **能直接挖到经销 Deye 的商户**：企业页列「已知销售商数量」+ 代理品牌（实测有商户页面标注经销 Deye / Sunsynk / Lux Power / Dyness 等）。
 - 免费，企业页含联系方式，是比 Google Maps 更"批发商友好"的目录源。
-- **已有脚本** `scripts/fetch_enf.py`（复用 pv-company-scraper 沉淀的 ENF 抓取知识：curl-cffi `impersonate=chrome124` 绕 Cloudflare + 邮箱 JS 解码 + seller→distributor 映射 + 欧盟 27 国过滤），用法见 SKILL.md 第二步③。
+- **已有脚本** `scripts/fetch_enf.py`（复用 pv-company-scraper 沉淀的 ENF 抓取知识：curl-cffi `impersonate=chrome124` 绕 Cloudflare + 邮箱 JS 解码 + seller→distributor 映射 + 欧盟 27 国 + 乌克兰过滤），用法见 SKILL.md 第二步③。
 
 ### D. 品牌官网 Find-a-Distributor
 
