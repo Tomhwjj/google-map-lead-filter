@@ -12,7 +12,7 @@ description: 多渠道外贸经销商线索挖掘与分级（Google Maps + Googl
 ## 输入
 
 - **产品类目**（如「光伏组件」「solar panel」）——**这是核心输入，技能目标是「找某品类的海外渠道」，不是「找某品牌的经销商」**
-- **目标国家/城市**（如「德国 汉堡」「Netherlands」）
+- **目标国家/城市**（如「德国 汉堡」「Netherlands」）——**仅欧盟国家，英国不在范围**（见 `references/deye-ecosystem.md`）
 - **客户类型**（distributor / wholesaler / importer）
 - **我方合作品牌（可选）**（如「Deye 德业」，用于背调判断官网是否在销售我方产品；含贴牌品牌，见 `references/brand-mapping.md`）。**品牌不是必需的**：未指定品牌时，按「增量口径」挖竞品品牌 + 不限品牌的品类批发商，这批本身就是品类渠道大鱼。
 
@@ -86,7 +86,7 @@ python scripts/backfill.py leads.csv --out backfill.json --brands "Deye,Sunsynk"
 python scripts/score_leads.py leads_final.json --out leads_scored.json
 ```
 
-评分口径见 `references/qualification-rules.md`：头部模式 产品30/渠道25/规模20/触达15/活跃10；长尾模式 产品30/渠道20/规模5/触达20/活跃10/开发难度15（中＞小＞大）。A级 80-100 / B级 50-79 / C级 0-49。⚠️ **规模/活跃三态防幻觉**：只有硬证据（`employees` 员工数 / `active_signals` 活跃信号）才给确定档位；否则标「估」（背调过但无硬证据）或「未确认 → 中性分 5」（未背调，`backfilled=false`）——**不归零、不把批量占位默认值包装成确定判断**。
+评分口径、每维权重、打分标准、三态防幻觉规则**全部以 `references/qualification-rules.md` 为唯一来源**（SKILL.md 不重复具体数字，避免两处漂移）。A级 80-100 / B级 50-79 / C级 0-49。
 
 ### 第八步：输出表格 + UI 报告
 
@@ -100,8 +100,8 @@ python scripts/render_report.py leads_final.json --out report.html --title "英�
 **UI 报告规格**（`render_report.py` 已实现，以下 8 要素必须全部具备，缺一不可）：
 
 1. **双评分模式切换** —— 顶部两按钮「头部模式（啃大客户）/ 长尾模式（铺小客户）」，切换后卡片分数/分级/维度条/排序/统计栏全部按当前模式重算。
-2. **评分规则图例** —— 可折叠 `<details>`，列 6 维度给分依据（产品30 / 渠道25·20 / 规模20·5 / 触达15·20 / 活跃10 / 开发难度15）。
-3. **每卡评分依据** —— 每个维度条后跟「依据」小字，三态标注：`证据`（员工数/活跃信号）→ 按档位；`估`（背调过无硬证据）→ 档位+「估」；`未确认`（未背调）→ 中性分 5 +「未确认·未背调」。
+2. **评分规则图例** —— 可折叠 `<details>`，列 4 维度给分依据（产品匹配 / 渠道 / 规模 / 触达，头部与长尾权重不同），数字以 `references/qualification-rules.md` 为准。
+3. **每卡评分依据** —— 每个维度条后跟「依据」小字，三态标注：`证据`（经营痕迹：仓库/多品牌/评分数）→ 按档位；`估`（背调过无硬证据）→ 档位+「估」；`未确认`（未背调）→ 中性分 +「未确认·未背调」。
 4. **卖 Deye 标志** —— `sells_deye=true` 卡片顶部绿色「✓ Deye」badge。
 5. **联系人触达排序** —— 电话（📞 前置，`tel:` 链接）→ WhatsApp（`wa.me` 绿标）→ 官网 → 邮箱（`mailto:`）→ LinkedIn → Google Maps。
 6. **导出 CSV 按钮** —— 客户端 Blob 下载，UTF-8 BOM（Excel 兼容），文件名 `leads_{当前模式}.csv`，导出当前筛选可见的卡片。
@@ -127,6 +127,7 @@ python scripts/serve_report.py report.html
 
 ## 引用
 
+- `references/deye-ecosystem.md` — **行业认知底座**：Deye 生态 / 贴牌 / 市场边界 / 欧盟经销商种子，动手前先读
 - `references/search-keywords.md` — 关键词生成
 - `references/multi-source.md` — 多源挖掘方法（Google Search / 品牌官网 / 展会 / 海关数据）
 - `references/qualification-rules.md` — 初筛 / 背调 / 评分 / 分级

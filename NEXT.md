@@ -4,18 +4,18 @@
 
 ## 当前状态（截至 2026-09-03）
 
-- **双模式评分**（头部/长尾）已实现：`scripts/score_leads.py`
-- **UI 报告规格**（8 要素：双模式切换/图例/每卡依据/Deye标志/触达排序/CSV导出/A-B-C筛选/统计栏）已实现：`scripts/render_report.py`
-- **三态防幻觉**（规模/活跃：证据 > 估 > 未确认中性分5）已实现并写进 SKILL.md
+- **评分改四维**（产品匹配/渠道/规模/触达）：砍掉活跃度、开发难度、教育档，规模改「经营痕迹三档」，Deye 是评分加分项不是筛选标准（见 `references/qualification-rules.md`）
+- **Deye 生态已固化**（`references/deye-ecosystem.md`）：公司基本盘、储能生态位、贴牌全表、欧盟市场边界、欧盟经销商种子名单
+- **市场边界**：只做欧盟（不含英国），已写入 SKILL.md / multi-source.md / deye-ecosystem.md
+- **双模式评分 + UI 报告规格**（8 要素）已实现：`score_leads.py` / `render_report.py`（⚠️ 代码仍硬编码旧五维权重，待同步）
 - 法国 334 条线索已跑通（数据在 `D:/Agent/tmp/leads_fr_*.json`，**不入 git**）
-- 最新提交：`6a856bb 固化UI报告规格到SKILL.md + 规模/活跃三态防幻觉`
 
 ## 接下来可做（按优先级）
 
-1. **批量补背调**（最重要）：310 条 Google Maps 安装商的规模/活跃还是"未确认中性5"占位值。若要真按长尾模式铺客户，需对排前的候选补背调（`backfill.py` 抓官网 about/news/招聘），把 `employees`（员工数）/`active_signals`（活跃信号）硬证据填进 JSON，否则这两维分数是虚的。
-2. **Facebook 链接补抓**：触达维度里 Facebook 占 4/5 分，但当前数据基本没有 `facebook` 字段，可补抓（之前用户说"先不做，后续补"）。
-3. **A 级 wholesaler 联系方式补全**：ESTG / SINES 等 12 家搜索 API 挖出的批发商，`email`/`phone` 还是空（reason 里标了"联系方式待官网补"）。
-4. **扩展到其他国家**：目前只做了法国。SKILL.md 流程通用，可跑德国/英国/荷兰等。
+1. **代码层同步评分四维**（最重要）：`score_leads.py` / `render_report.py` 仍硬编码旧五维权重（含活跃/开发难度），必须改成与 `qualification-rules.md` 新四维一致。
+2. **搜索词转储能**（方向已定，待深挖完统一改 `search-keywords.md`）：品类词从 solar panel 转向 battery storage / hybrid inverter / Speicher 等储能词。
+3. **欧盟经销商种子线索落地**：`deye-ecosystem.md` 第六节已列德国/法国/荷兰/西班牙 + 欧洲级的 Deye 官方分销商，可先对这批跑 backfill 补邮箱/电话，作为第一批 A 级存量线索。
+4. **扩展到其他欧盟国家**：目前只做了法国，可跑德国/荷兰/西班牙/意大利等（英国不做）。
 
 ## 开发注意（重要）
 
@@ -29,4 +29,4 @@
   done
   ```
 - **数据文件**（`D:/Agent/tmp/leads_fr_*.json`）是会话产物，不入 git，新窗口跑会重新生成。
-- 评分/UI/三态口径见 `SKILL.md` 第七、八步 + `references/qualification-rules.md`，改口径时三处（代码 + SKILL.md + rules）要同步对齐。
+- 评分/UI/三态口径**唯一来源是 `references/qualification-rules.md`**，SKILL.md 不重复具体数字；改口径时改 rules + 代码（`score_leads.py` / `render_report.py`）两处即可。

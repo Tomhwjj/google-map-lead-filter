@@ -1,6 +1,12 @@
 # 多源挖掘方法
 
-Google Maps 覆盖不足时的补充/主力数据源。
+Google Maps 覆盖不足时的补充数据源。
+
+## 市场边界（铁律）
+
+- **只做欧洲（欧盟 27 国）**，英国不在范围内（英国已脱欧，非欧盟）。
+- 美国（Sol-Ark 市场）不做，Sol-Ark 贴牌仅用于识别同源产品。
+- 英国、南非、北美等非欧盟市场一律不挖。
 
 ## 核心口径：存量 vs 增量（先想清楚再搜）
 
@@ -21,13 +27,13 @@ Google Maps 覆盖不足时的补充/主力数据源。
 
 | 模式 | 示例 | 命中类型 |
 |------|------|----------|
-| `{品牌} distributor {国家}` | `Sunsynk distributor UK` | 官方/授权分销商 |
-| `{品牌} authorized distributor {国家}` | `Deye authorized distributor UK` | 授权分销商 |
-| `{品牌} wholesale {国家}` | `Sunsynk wholesale UK` | 批发商 |
-| `{品牌} stockist {国家}` | `Sunsynk stockist UK` | 存货商/零售商 |
-| `{品牌} {国家} {城市}` | `Sunsynk London` | 本地渠道 |
-| `{品牌} trade supplier` | `Sunsynk trade supplier` | 贸易供应商 |
-| 竞品品牌替换（找增量机会） | `Growatt distributor UK` | 卖竞品的批发商，可 pitch 引 Deye 替换 |
+| `{品牌} distributor {国家}` | `Deye distributeur FR` | 官方/授权分销商 |
+| `{品牌} authorized distributor {国家}` | `Deye authorized distributor DE` | 授权分销商 |
+| `{品牌} wholesale {国家}` | `Deye wholesale FR` | 批发商 |
+| `{品牌} stockist {国家}` | `Deye stockist DE` | 存货商/零售商 |
+| `{品牌} {国家} {城市}` | `Deye onduleur Lyon` | 本地渠道 |
+| `{品牌} trade supplier` | `Deye trade supplier` | 贸易供应商 |
+| 竞品品牌替换（找增量机会） | `Sungrow distributor DE` | 卖竞品的批发商，可 pitch 引 Deye 替换 |
 | 不限品牌品类批发商（增量主力） | `solar wholesaler {国家}` / `PV Großhändler` | 品类头部批发商，没卖我方品牌=增量机会（德国 BayWa/Krannich 靠这招挖出） |
 
 **产出**：每命中一条记 `company_name / website / country / city / customer_type / source_url`。
@@ -55,7 +61,7 @@ Google Maps 覆盖不足时的补充/主力数据源。
 
 行业展会参展商名单全是真实贸易商，直接抓名录：
 
-- 光伏：Solar & Storage Live（UK）、Intersolar（欧洲）、Genera（西班牙）、Key Energy（意大利）
+- 光伏：Intersolar Europe（德国）、Genera（西班牙）、Key Energy（意大利）、Be Positive（法国）、Solar Solutions（荷兰）
 - 搜 `{行业} trade show {国家} exhibitor list 2026` 找名录页
 - 从名录里筛「distributor / wholesaler / supplier」标签的公司
 
