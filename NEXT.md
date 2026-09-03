@@ -19,6 +19,7 @@
 
 - ✅ 代码层同步评分四维（`score_leads.py` / `render_report.py`，砍活跃/开发难度，规模改经营痕迹三档，触达改电话>邮箱>官网）
 - ✅ 搜索词转储能定稿（`search-keywords.md`，品类从组件转储能逆变器+电池）
+- ✅ skill 一致性完善（存量>增量口径修正 + 贴牌 Fusion/OHm/Noark 核实 + 组件词残留转储能 + 旧五维残留清理）
 
 ## 开发注意（重要）
 
@@ -33,3 +34,4 @@
   ```
 - **数据文件**（`D:/Agent/tmp/leads_fr_*.json`）是会话产物，不入 git，新窗口跑会重新生成。
 - 评分/UI/三态口径**唯一来源是 `references/qualification-rules.md`**，SKILL.md 不重复具体数字；改口径时改 rules + 代码（`score_leads.py` / `render_report.py`）两处即可。
+- **技术债（扩展欧盟国家前要改）**：`render_report.py` 的 `wa_link()` 硬编码法国 +33，跑德国(+49)/荷兰(+31)/西班牙(+34)前需按 `country` 字段映射；触达「因地制宜」（德国电话降级）目前只写进 rules、代码未自动判，靠 Claude 背调手动降档。
