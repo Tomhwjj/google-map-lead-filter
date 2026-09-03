@@ -8,13 +8,13 @@ Google Search 批量抓取（走 AnySearch 聚合搜索 API，零额外成本）
 
 用法:
     # 命令行传多个关键词
-    python search_leads.py "grossiste photovoltaïque France" "Sungrow distributeur France" --out search.csv
+    python search_leads.py "grossiste stockage batterie France" "Sungrow distributeur France" --out search.csv
 
     # 从文件读关键词（每行一个）
     python search_leads.py --queries-file keywords.txt --out search.csv
 
     # 指定语言 / 每个词结果数（1-10）
-    python search_leads.py "installateur photovoltaïque Lyon" --language fr --max-results 10
+    python search_leads.py "installateur batterie solaire Lyon" --language fr --max-results 10
 
 输出 CSV 字段: company_name, website, snippet, query, source_url
   - company_name / website 来自搜索结果标题/URL（含噪声，需后续背调精判）

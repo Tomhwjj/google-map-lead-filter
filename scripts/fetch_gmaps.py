@@ -4,7 +4,7 @@
 抓取 Google Maps 搜索结果，解析商家卡片，输出 CSV。
 
 用法:
-    python fetch_gmaps.py "solar panel distributor Hamburg" --max 50 --out leads.csv
+    python fetch_gmaps.py "battery storage distributor Hamburg" --max 50 --out leads.csv
 
 依赖: playwright (pip install playwright && playwright install chromium)
 """
@@ -93,7 +93,7 @@ def parse_article(article):
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description="抓取 Google Maps 搜索结果 -> CSV")
-    ap.add_argument("query", help="搜索词，如 'solar panel distributor Hamburg'")
+    ap.add_argument("query", help="搜索词，如 'battery storage distributor Hamburg'")
     ap.add_argument("--max", type=int, default=50, help="最多抓取条数 (默认 50)")
     ap.add_argument("--out", default="leads.csv", help="输出 CSV 路径")
     ap.add_argument("--proxy", default=DEFAULT_PROXY, help="代理地址")

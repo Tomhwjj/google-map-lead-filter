@@ -10,16 +10,16 @@ Google Maps 覆盖不足时的补充数据源。
 
 ## 核心口径：存量 vs 增量（先想清楚再搜）
 
-客户少不是挖得不够，是**口径错了**。两条搜索路线，价值天差地别：
+两条搜索路线，价值有高低：
 
 | 口径 | 搜什么 | 挖到的客户 | 价值 |
 |------|--------|-----------|------|
-| **存量** | `{我方品牌} distributor` | 已经在卖我方品牌的经销商 | 低——已有官方/大分销供货，切入=抢生意 |
-| **增量** | `{竞品品牌} distributor` + `solar wholesaler`（不限品牌） | 卖同品类但没卖我方品牌的批发商 | 高——现成渠道，pitch 引我方品牌补线 |
+| **存量** | `{我方品牌} distributor` | 已经在卖 Deye 的经销商 | **最高优先**——卖 Deye 为主，精准获客 |
+| **增量** | `{竞品品牌} distributor` + 储能批发词（不限品牌） | 卖竞品储能/逆变器但没卖 Deye 的批发商 | 次之——现成渠道，pitch 引 Deye 替换 |
 
-**默认增量优先**：即使指定了品牌（如 Deye），也要搜竞品品牌（Growatt/Sungrow/Huawei/FoxESS/Solis/Sigenergy/GoodWe…）+ 不限品牌品类词（`solar wholesaler` / `PV Großhändler`）。这些批发商本身就是品类渠道大鱼，品牌只是「他们目前没卖我方品牌」的增量信号。
+**存量优先、增量也挖**：存量（卖 Deye）产品匹配直接满分，是最高价值；增量（卖竞品）同样要挖——对方需求大、我们价格好就能抢下来（广撒网）。两条线都搜，存量优先。
 
-**品牌是参数，不是目标**：技能定位是「找某品类的海外渠道」。没指定品牌时，增量口径就是主路线；指定了品牌，存量+增量都挖，增量为主。
+**品牌是评分加分项、不是抓取筛选标准**：抓取按品类广撒网（储能/逆变器），不按品牌过滤；背调后 Deye（含贴牌）命中 = 存量满分，卖竞品 = 增量次之。
 
 ## 1. Google Search 关键词挖掘（零 API，最有效）
 
@@ -34,7 +34,7 @@ Google Maps 覆盖不足时的补充数据源。
 | `{品牌} {国家} {城市}` | `Deye onduleur Lyon` | 本地渠道 |
 | `{品牌} trade supplier` | `Deye trade supplier` | 贸易供应商 |
 | 竞品品牌替换（找增量机会） | `Sungrow distributor DE` | 卖竞品的批发商，可 pitch 引 Deye 替换 |
-| 不限品牌品类批发商（增量主力） | `solar wholesaler {国家}` / `PV Großhändler` | 品类头部批发商，没卖我方品牌=增量机会（德国 BayWa/Krannich 靠这招挖出） |
+| 不限品牌储能批发商（增量） | `battery storage wholesaler {国家}` / `Speicher Großhändler` | 品类头部批发商，没卖 Deye=增量机会（德国 BayWa/Krannich 靠这招挖出） |
 
 **产出**：每命中一条记 `company_name / website / country / city / customer_type / source_url`。
 

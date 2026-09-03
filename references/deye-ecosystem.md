@@ -38,11 +38,11 @@ Deye 是 OEM，多家海外品牌是它的贴牌。背调 `--brands` **必须带
 | Sunsynk | Deye OEM，硬件同源，加定制固件/UI，贵 15-25% | 南非 |
 | Sol-Ark | Deye OEM，美国独家合作伙伴（2018 起） | 美国（非目标市场） |
 | INGE | Deye 制造、INGE 品牌 | 南非 |
-| Fusion | Deye 贴牌 | 待进一步核实 |
-| OHm | Deye 贴牌 | 待进一步核实 |
-| Noark | Deye 贴牌 | 待进一步核实 |
+| Fusion | Deye OEM（Solaradvice 卖） | 南非 |
+| OHm | Deye OEM | 南非 |
+| Noark | Deye OEM（正泰 Chint 旗下） | 澳大利亚 |
 
-> ⚠️ **欧盟市场 Deye 以本牌为主**，贴牌（Sunsynk/Sol-Ark/INGE）主要分布在英国、南非、北美等非欧盟市场。欧盟背调重点搜 "Deye"，贴牌命中少属正常（用户实测已印证）。
+> ⚠️ **欧盟市场 Deye 以本牌为主**，贴牌（Sunsynk/Sol-Ark/INGE/Fusion/OHm/Noark）主要分布在南非、澳大利亚、北美等非欧盟市场。欧盟背调重点搜 "Deye"，贴牌命中少属正常（用户实测已印证）。
 
 ## 四、市场边界（铁律）
 

@@ -27,8 +27,8 @@ description: 多渠道外贸经销商线索挖掘与分级（Google Maps + Googl
 **① 搜索 API 批量**（挖批发商大鱼）——用 `scripts/search_leads.py`（走 AnySearch 聚合搜索 API，零额外成本）：
 
 ```bash
-python scripts/search_leads.py "grossiste photovoltaïque France" "Sungrow distributeur France" \
-    "installateur photovoltaïque Lyon" --language fr --out search.csv
+python scripts/search_leads.py "grossiste stockage batterie France" "Sungrow distributeur France" \
+    "installateur batterie solaire Lyon" --language fr --out search.csv
 # 或从文件读几十个关键词
 python scripts/search_leads.py --queries-file keywords.txt --language fr --out search.csv
 ```
@@ -47,7 +47,7 @@ python scripts/list_scraper.py "https://brand.com/where-to-buy" "https://show.co
 
 ```bash
 for city in Lyon Marseille Bordeaux Toulouse; do
-  python scripts/fetch_gmaps.py "installateur photovoltaïque $city" --max 40 --out "fr_$city.csv"
+  python scripts/fetch_gmaps.py "installateur batterie solaire $city" --max 40 --out "fr_$city.csv"
 done
 ```
 

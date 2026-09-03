@@ -26,7 +26,7 @@ CONTACT_PATHS = ["contact", "kontakt", "impressum", "about", "about-us",
                  "ueber-uns", "contact-us", "en/contact", "de/kontakt"]
 
 # 品牌/产品页路径（品牌未命中时抓，判断官网代理哪些品牌）
-BRAND_PATHS = ["brands", "products", "inverters", "solar-panels", "manufacturers"]
+BRAND_PATHS = ["brands", "products", "inverters", "battery-storage", "batteries", "manufacturers"]
 
 
 def extract_emails(text):

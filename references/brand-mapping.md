@@ -9,9 +9,9 @@
 | Deye（宁波德业） | **Sunsynk** | 南非 |
 | Deye | **Sol-Ark** | 北美（非目标市场） |
 | Deye | **INGE** | 南非 |
-| Deye | **Fusion** | 待核实 |
-| Deye | **OHm** | 待核实 |
-| Deye | **Noark** | 待核实 |
+| Deye | **Fusion** | 南非（Solaradvice 卖） |
+| Deye | **OHm** | 南非 |
+| Deye | **Noark** | 澳大利亚（正泰 Chint 旗下） |
 
 > Sunsynk 逆变器由 Ningbo Deye Inverter Technology 代工，硬件与 Deye 一致，仅固件 / 监控 App 不同。Sunsynk 主要在英国、南非销售。**欧盟市场 Deye 以本牌为主**，贴牌在欧盟命中少属正常。
 
