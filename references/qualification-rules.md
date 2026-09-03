@@ -44,6 +44,8 @@ Claude 读 `backfill.json`，按优先级判断：
 | 公司规模 | 经营痕迹：官网自述 wholesale/distribution、代理几个品牌、有无仓储/物流描述、Google Maps 评分数（≈经营久）。**不看精确员工数**（长尾拿不到） |
 
 > ⚠️ `brands_found` 命中只是「提到该品牌」，要结合 `brands_context` 上下文判断是「作为经销商在销售」还是「作为竞品被提及」。判断不了标「未确认」。
+>
+> ⚠️ **`score_leads.py` 的 `sells_deye` 是机械判断**（`brands_found` 含我方品牌即算 `sells_deye=True`），**无法自动区分「销售」vs「提及」**——比价平台/信息站在品牌列表里列举 Deye 会被误标成「卖 Deye」（实测 Solarscouts）。落盘前 Claude 必须读 `brands_context` 复核：产品页/产品线/「authorized distributor / partner / Gold-Level Sales Partner」= 销售；品牌列表/比价/资讯站 = 提及，手工降级。
 
 ### 兜底：官网拿不到品牌 / 规模证据时
 
@@ -97,6 +99,14 @@ Claude 读 `backfill.json`，按优先级判断：
 | 小型 | 本地安装/零售、单一品牌、无仓储描述、评分数少 |
 
 > ⚠️ **三态防幻觉**：只有硬证据（仓库/多品牌/评分数等经营痕迹）才给确定档位；否则标「估」（背调过但无硬证据）或「未确认 → 中性分」（未背调）——**不归零、不把批量占位默认值包装成确定判断**。Google Maps 批量抓的安装商若没逐个背调，规模就是未确认中性分，重点客户需补背调核实。
+
+> ⚠️ **Großhandel / distributor 是「渠道类型」，不是「规模」**：官网写「Großhandel / wholesaler / distributor」只能判渠道分，不能据此判规模档。规模三档看的是**仓库、代理品牌数、客户数、年限、团队、覆盖范围**这些经营痕迹硬信号——德国 50 家实测，一堆官网自称 Großhandel，规模从本地安装队到全国连锁批发都有，混在一起。
+
+### 规模判断流程（背调时照做）
+
+1. **完整版 backfill 抓 body**——不加 `--fast`，抓首页 + contact + About 页 + 品牌页（`--fast` 只抓首页，规模自述常写在 About 页会漏）。
+2. **Claude 人工读 body 判档**——这是正道。经营痕迹写在哪、代理几个品牌、仓库/物流/年限/团队/覆盖范围，人读得出来。
+3. **关键词只做「定位辅助」**：可用正则找 `wholesale / warehouse / lager / fuhrpark / jahr / kunden / partner` 等词快速定位候选句，但**不能靠正则自动定档**——官网措辞参差，正则必漏判（SolarV、New Power 用别的措辞就漏）、必误判（Großhandel 只是渠道）。定位后仍要人读上下文确认。
 
 ### 触达怎么算（WhatsApp 最高 + 因地制宜）
 
