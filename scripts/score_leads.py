@@ -26,6 +26,7 @@
 """
 import argparse
 import json
+import re
 import sys
 
 # 贴牌映射：我方品牌 Deye 的贴牌/代工品牌，命中即视为卖 Deye（存量）。与 brand-mapping.md 一致
@@ -60,8 +61,13 @@ def grade_of(score):
     return "C"
 
 
+def _brand_match(brand, deye):
+    """词边界匹配，避免 INGE 误命中 Ingenieur/springen、Fusion 误命中 FusionSolar。"""
+    return re.search(r"(?<![a-z0-9])" + re.escape(deye) + r"(?![a-z0-9])", brand.lower()) is not None
+
+
 def sells_deye(brands):
-    return any(any(db in b.lower() for db in DEYE_BRANDS) for b in (brands or []))
+    return any(any(_brand_match(b, db) for db in DEYE_BRANDS) for b in (brands or []))
 
 
 def product_score(brands):

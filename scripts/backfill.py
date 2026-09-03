@@ -34,14 +34,14 @@ def extract_emails(text):
 
 
 def find_brands(text, brands):
-    """在文本中搜索品牌关键词，返回 {品牌: 上下文片段}。"""
+    """在文本中搜索品牌关键词（词边界匹配，避免 INGE 误命中 springen/Ingenieur），返回 {品牌: 上下文片段}。"""
     found = {}
     low = text.lower()
     for b in brands:
-        bidx = low.find(b.lower())
-        if bidx >= 0:
-            start = max(0, bidx - 100)
-            end = min(len(text), bidx + 100)
+        m = re.search(r"(?<![a-z0-9])" + re.escape(b.lower()) + r"(?![a-z0-9])", low)
+        if m:
+            start = max(0, m.start() - 100)
+            end = min(len(text), m.end() + 100)
             found[b] = text[start:end].strip()
     return found
 
