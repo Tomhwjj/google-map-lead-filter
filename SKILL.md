@@ -39,6 +39,14 @@ python scripts/search_leads.py --queries-file keywords.txt --language fr --out s
 python scripts/list_scraper.py "https://brand.com/where-to-buy" "https://show.com/exhibitors" --out list.csv
 ```
 
+**③ ENF 目录抓取**（`enf.com`，批发商友好度最高的目录源，企业页列代理品牌能直接挖经销 Deye 的商户）——用 `scripts/fetch_enf.py`：
+
+```bash
+python scripts/fetch_enf.py --country DE,FR,NL --category seller --max 200 --out enf.csv
+```
+
+ENF 的 seller=经销商（脚本已映射 distributor）、installer=安装商；邮箱是 JS 混淆，脚本内置解码；只抓欧盟 27 国。
+
 搜索词按 `references/multi-source.md` 生成（增量口径：竞品品牌 + 不限品牌品类词）。⚠️ 列表页仅对静态 `<a>` 列表有效；JS 动态页（华为 find-distributor、tecsol 名录）用 **anysearch extract** 抓全文兜底（已验证 tecsol 名录 223 家供应商）。
 
 ### 第三步：Google Maps 批量抓取（全客户类型，批发商/安装商都搜）
@@ -137,6 +145,7 @@ python scripts/serve_report.py report.html
 - `templates/lead-table.md` — 输出表格模板
 - `scripts/fetch_gmaps.py` — Google Maps 批量抓取脚本（全客户类型，批发商/安装商都搜）
 - `scripts/search_leads.py` — 搜索 API 批量挖掘脚本（AnySearch）
+- `scripts/fetch_enf.py` — ENF Solar 目录抓取脚本（批发商友好目录源，seller→distributor，邮箱 JS 解码）
 - `scripts/list_scraper.py` — 列表页抓取脚本（品牌经销商名单 / 展会名录）
 - `scripts/merge_leads.py` — 多源 CSV 合并去重脚本
 - `scripts/backfill.py` — 批量背调脚本（抓官网提取邮箱/品牌）

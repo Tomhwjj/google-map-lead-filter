@@ -43,6 +43,7 @@
 - 产品分类：组件 / **逆变器** / **储能系统**——直接对应 Deye 品类。
 - **能直接挖到经销 Deye 的商户**：企业页列「已知销售商数量」+ 代理品牌（实测有商户页面标注经销 Deye / Sunsynk / Lux Power / Dyness 等）。
 - 免费，企业页含联系方式，是比 Google Maps 更"批发商友好"的目录源。
+- **已有脚本** `scripts/fetch_enf.py`（复用 pv-company-scraper 沉淀的 ENF 抓取知识：curl-cffi `impersonate=chrome124` 绕 Cloudflare + 邮箱 JS 解码 + seller→distributor 映射 + 欧盟 27 国过滤），用法见 SKILL.md 第二步③。
 
 ### D. 品牌官网 Find-a-Distributor
 
