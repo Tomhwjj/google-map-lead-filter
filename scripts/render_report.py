@@ -26,14 +26,10 @@ GRADE_STYLE = {
 }
 
 # 两套模式的维度显示名 + 满分
-DIM_HEAD = {"产品匹配": ("产品匹配", 30), "渠道": ("渠道匹配", 25), "规模": ("公司规模", 20),
-            "触达": ("触达(电话>FB>邮箱)", 15), "活跃": ("活跃度", 10)}
-DIM_TAIL = {"产品匹配": ("产品匹配", 30), "渠道": ("渠道匹配", 20), "规模": ("公司规模", 5),
-            "触达": ("触达(电话>FB>邮箱)", 20), "活跃": ("活跃度", 10), "开发难度": ("开发难度", 15)}
-
-CSV_FIELDS = ["公司名", "国家", "城市", "官网", "电话", "邮箱", "Facebook", "客户类型",
-              "卖Deye", "品牌命中", "分数", "分级", "开发理由", "Google Maps", "来源URL"]
-
+DIM_HEAD = {"产品匹配": ("产品匹配", 30), "渠道": ("渠道匹配", 25), "规模": ("公司规模", 25),
+            "触达": ("触达(电话>邮箱>官网)", 20)}
+DIM_TAIL = {"产品匹配": ("产品匹配", 30), "渠道": ("渠道匹配", 20), "规模": ("公司规模", 25),
+            "触达": ("触达(电话>邮箱>官网)", 25)}
 
 def esc(s):
     return html.escape(str(s or ""))
@@ -207,14 +203,12 @@ def render(leads, title):
   <details class="legend" open>
     <summary>评分规则说明（依据）</summary>
     <div class="legend-grid">
-      <div class="legend-item"><b>产品匹配 30</b><br><span>已卖Deye=30（存量） · 卖竞品=27（增量） · 品类相关=24</span></div>
-      <div class="legend-item"><b>渠道 25/20</b><br><span>批发/分销商 &gt; 安装商/零售商 &gt; 零售</span></div>
-      <div class="legend-item"><b>规模 20/5</b><br><span>员工数+覆盖：大型≥18 · 中大型13-17 · 中型6-12 · 小型1-5 · 未确认中性5</span></div>
-      <div class="legend-item"><b>触达 15/20</b><br><span>电话(可加WhatsApp) 8/12 &gt; Facebook 4/5 &gt; 邮箱3（底线）</span></div>
-      <div class="legend-item"><b>活跃 10</b><br><span>近6月招聘/新闻/社媒/展会 8-10 · 近1年更新 5-7 · 静态 1-4 · 未确认中性5</span></div>
-      <div class="legend-item"><b>开发难度 15（仅长尾）</b><br><span>中型最好开发 15 &gt; 小型 9 &gt; 大型（有联系方式4/无0）</span></div>
+      <div class="legend-item"><b>产品匹配 30</b><br><span>已卖Deye/贴牌=30（存量） · 卖竞品储能/逆变器=24（增量） · 无证据=0</span></div>
+      <div class="legend-item"><b>渠道 25/20</b><br><span>批发/分销商 &gt; 安装商 &gt; 零售</span></div>
+      <div class="legend-item"><b>规模 25/25</b><br><span>经营痕迹三档：头部 大型25·中型17·小型8 · 长尾 中型25·小型20·大型12 · 未确认按小型</span></div>
+      <div class="legend-item"><b>触达 20/25</b><br><span>电话(可WhatsApp) 20/25 &gt; 邮箱 14/18 &gt; 仅官网 8/10（德国因地制宜）</span></div>
     </div>
-    <p style="margin-top:10px;font-size:12.5px;color:#64748b">⚠️ 规模/活跃三态防幻觉：<b>有证据</b>(员工数/活跃信号) → 按档位 · <b>估</b>(背调过但无硬证据) → 标「估」 · <b>未确认</b>(未背调) → 给中性分5、不归零不假装判断。</p>
+    <p style="margin-top:10px;font-size:12.5px;color:#64748b">⚠️ 规模三态防幻觉：<b>经营痕迹</b>(仓库/多品牌/评分数) → 按档位 · <b>估</b>(背调过无硬证据) → 档位+「估」 · <b>未确认</b>(未背调) → 按小型档保守、不归零不假装判断。</p>
   </details>
   <div class="stats">
     <div class="stat"><div class="num">{total}</div><div class="lbl">线索总数</div></div>

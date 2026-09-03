@@ -1,0 +1,8 @@
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 会话产物（数据文件在 D:/Agent/tmp/，不入 git；这里兜底项目内散落的临时文件）
+*.tmp.json
+leads_*.json
+report.html
