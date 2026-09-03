@@ -31,3 +31,15 @@ python scripts/backfill.py leads.csv --out backfill.json --brands "Deye,Sunsynk,
 - 观察同源产品在不同市场的品牌名（Deye ↔ Sunsynk ↔ Sol-Ark ↔ INGE）
 
 > ⚠️ 命中贴牌品牌时，开发理由里要写清楚「Sunsynk = Deye 贴牌，同源产品」，避免自己误判为竞品。
+
+## ⚠️ 品牌关键词匹配必须用词边界（血泪教训）
+
+短品牌名做 substring 匹配会灾难性误命中本地语言普通词（2026-09 德国 ENF 50 家实测）：
+
+| 品牌 | substring 误命中 |
+|------|-----------------|
+| INGE | 德语 `springen`(跳转，每个网站导航都有)、`Ingenieur`(工程师)、`Dinge`(东西) → 23/50 假命中 |
+| Fusion | `FusionSolar`(华为产品线) → 假命中 |
+| OHm | 电阻单位 `Ohm`(电气官网常见) → 潜在误命中 |
+
+**规则**：`backfill.py` 的 `find_brands` 和 `score_leads.py` 的 `sells_deye` 必须用词边界正则 `(?<![a-z0-9])品牌名(?![a-z0-9])`，**禁止 `in` substring 匹配**。已修，勿回退。
