@@ -69,13 +69,22 @@ def make_session(proxy=""):
     return s
 
 
-def fetch(session, url):
-    """抓页面，403/503 视为 Cloudflare 拦截。"""
-    resp = session.get(url, impersonate="chrome124", timeout=30)
-    if resp.status_code in (403, 503):
-        raise RuntimeError(f"Cloudflare 拦截 {resp.status_code}: {url}")
-    resp.raise_for_status()
-    return resp.text
+def fetch(session, url, retries=3):
+    """抓页面：403/503 视为 Cloudflare 拦截，429 限流退避重试。"""
+    for attempt in range(retries + 1):
+        resp = session.get(url, impersonate="chrome124", timeout=30)
+        if resp.status_code in (403, 503):
+            raise RuntimeError(f"Cloudflare 拦截 {resp.status_code}: {url}")
+        if resp.status_code == 429:
+            if attempt < retries:
+                wait = (attempt + 1) * 5 + random.uniform(0, 3)
+                print(f"    ⏳ 429 限流，{wait:.0f}s 后重试 ({attempt + 1}/{retries})", file=sys.stderr)
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"HTTP 429 限流重试耗尽: {url}")
+        resp.raise_for_status()
+        return resp.text
+    raise RuntimeError(f"抓取失败: {url}")
 
 
 def parse_total_pages(tree):
@@ -189,7 +198,7 @@ def main():
     ap.add_argument("--max-pages", type=int, default=0, help="每个组合最多翻页数 (0=全部)")
     ap.add_argument("--out", default="enf_leads.csv", help="输出 CSV 路径")
     ap.add_argument("--proxy", default="", help="代理地址（默认直连）")
-    ap.add_argument("--delay", type=float, default=0.8, help="详情页间延迟秒数基准")
+    ap.add_argument("--delay", type=float, default=2.0, help="详情页间延迟秒数基准（ENF 限流敏感，勿调小）")
     args = ap.parse_args()
 
     countries = [c.strip().upper() for c in args.country.split(",") if c.strip()]
