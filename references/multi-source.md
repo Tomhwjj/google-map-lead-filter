@@ -1,6 +1,6 @@
-# 多源挖掘方法
+# 多源获客途径（数据来源）
 
-Google Maps 覆盖不足时的补充数据源。
+> **所有途径平等并列、不分主次、不分先后**。目标是每个途径都尽可能挖到线索，多源并行、叠加去重——一条线索可能从多个源撞出来，合并时保留字段最全/评分最高的那条。
 
 ## 市场边界（铁律）
 
@@ -21,73 +21,85 @@ Google Maps 覆盖不足时的补充数据源。
 
 **品牌是评分加分项、不是抓取筛选标准**：抓取按品类广撒网（储能/逆变器），不按品牌过滤；背调后 Deye（含贴牌）命中 = 存量满分，卖竞品 = 增量次之。
 
-## 1. Google Search 关键词挖掘（零 API，最有效）
+## 获客途径全景（平等并列，不分主次）
 
-用 WebSearch 逐组搜，命中即出线索。关键词模板（`{品牌}` 含贴牌品牌，如 Deye → Sunsynk/Sol-Ark/INGE，见 `references/brand-mapping.md`）：
+### A. Google Maps 批量（脚本 `fetch_gmaps.py`）
 
-| 模式 | 示例 | 命中类型 |
-|------|------|----------|
-| `{品牌} distributor {国家}` | `Deye distributeur FR` | 官方/授权分销商 |
-| `{品牌} authorized distributor {国家}` | `Deye authorized distributor DE` | 授权分销商 |
-| `{品牌} wholesale {国家}` | `Deye wholesale FR` | 批发商 |
-| `{品牌} stockist {国家}` | `Deye stockist DE` | 存货商/零售商 |
-| `{品牌} {国家} {城市}` | `Deye onduleur Lyon` | 本地渠道 |
-| `{品牌} trade supplier` | `Deye trade supplier` | 贸易供应商 |
-| 竞品品牌替换（找增量机会） | `Sungrow distributor DE` | 卖竞品的批发商，可 pitch 引 Deye 替换 |
-| 不限品牌储能批发商（增量） | `battery storage wholesaler {国家}` / `Speicher Großhändler` | 品类头部批发商，没卖 Deye=增量机会（德国 BayWa/Krannich 靠这招挖出） |
+搜「品类/客户类型/品牌 × 城市」，**全客户类型都搜**：
 
-**产出**：每命中一条记 `company_name / website / country / city / customer_type / source_url`。
+- ⚠️ **纠正「Google Maps 只铺安装商」的旧认知**：Google Maps 搜批发商词（`wholesaler` / `Großhändler` / `distributor`）命中的是「Solar energy equipment supplier」分类的**批发商/设备供应商**，一样能挖批发商（2026-09 实测：搜 `solar wholesaler Hamburg` 20 条全命中 equipment supplier，如 solarspeicher24 / SEH SolarEnergie）。
+- 客户类型词全铺：distributor / wholesaler / importer / installer（见 `search-keywords.md`），不要只搜 installer。
+- 批发商有实体仓库/展厅，Google Maps 上通常有 listing，是挖批发商的完整途径，不是"安装商专属"。
 
-**背调要求**：搜索结果标题说「distributor」不等于真分销商，必须进官网确认（跑 backfill 或 WebSearch 产品页），证据写进 reason。
+### B. 搜索 API 批量（脚本 `search_leads.py`，AnySearch）
 
-**⚠️ 品牌词歧义（2026-09 法国实测教训）**：品牌缩写可能撞上完全不同的行业/公司，搜索 API 结果噪声极高：
-- `Solis` 撞上印度「Solis 拖拉机」（法国农机经销商 Eurotrac / Groupe Rullier / VSM 分销的是拖拉机，不是 Solis 逆变器）
-- `Fox` 撞上 Fox News / FOXA 股票 / Michael J. Fox 基金会（不是 FoxESS）
-- `GoodWe` 撞上酒店招聘 / Yelp / 无关资讯
+搜「品牌/品类 + 国家 + 渠道词」批量跑，挖官网/搜索结果。品牌词模板见下。
 
-**对策**：品牌词必须带品类限定词，如 `Solis onduleur France`（不是 `Solis France`）、`FoxESS distributeur`（不是 `Fox`）；搜索 API 结果先按域名噪声表过滤（social/news/招聘/电商/黄页），剩下候选再进官网背调精判，不能凭标题/摘要就认定。
+### C. ENF Solar 企业目录（`enf.com`）★ 核心目录源
 
-## 2. 品牌官网 Find-a-Distributor 名单
+全球光伏企业目录（2005 年起，16000+ 制造商/销售商/安装商，8 语言）：
 
-品牌官网常有官方渠道查询页，直接列地区授权经销商，是最干净的线索源：
+- 企业分类：**经销商 / 批发商 / 安装商 / 制造商 / 系统集成商**，按**国家**筛。
+- 产品分类：组件 / **逆变器** / **储能系统**——直接对应 Deye 品类。
+- **能直接挖到经销 Deye 的商户**：企业页列「已知销售商数量」+ 代理品牌（实测有商户页面标注经销 Deye / Sunsynk / Lux Power / Dyness 等）。
+- 免费，企业页含联系方式，是比 Google Maps 更"批发商友好"的目录源。
 
-- Sunsynk 官网 `sunsynk.org` → "Find an installer" / "Where to buy" / distributor locator
-- Deye 官网 `deyeinverter.com` → "Where to buy" / 合作新闻稿（「Deye 与 XX 签约分销」）
-- 其它品牌同理：找 `find-a-distributor` / `where-to-buy` / `partners` / `dealers` 页
+### D. 品牌官网 Find-a-Distributor
 
-**优点**：官方认证，渠道类型明确。**缺点**：只列官方授权，漏掉未授权但实际在卖的批发商，需配合 Google Search 补。
+品牌官网的渠道查询页，直接列地区授权经销商：
 
-## 3. 展会名录
+- **存量线**：Deye 官网 `deyeinverter.com` → where-to-buy / 合作新闻稿；贴牌官网（Sunsynk 等）→ find-an-installer。
+- **增量线**：竞品品牌（Sungrow / Huawei / GoodWe / Growatt / FoxESS / Sigenergy）官网的经销商名单 = 卖竞品的增量目标。
+- 找 `find-a-distributor` / `where-to-buy` / `partners` / `dealers` 页。
+- **优点**：官方认证、渠道类型明确。**缺点**：只列官方授权，漏未授权但在卖的批发商，需配合其它源补。
 
-行业展会参展商名单全是真实贸易商，直接抓名录：
+### E. 展会参展商名录
 
-- 光伏：Intersolar Europe（德国）、Genera（西班牙）、Key Energy（意大利）、Be Positive（法国）、Solar Solutions（荷兰）
-- 搜 `{行业} trade show {国家} exhibitor list 2026` 找名录页
-- 从名录里筛「distributor / wholesaler / supplier」标签的公司
+行业展会参展商名单全是真实贸易商：
 
-**产出**：公司名 + 官网 + 展位，渠道类型较准。
+- 光伏/储能：Intersolar Europe（德国）、Genera（西班牙）、Key Energy（意大利）、Be Positive（法国）、Solar Solutions（荷兰）。
+- 搜 `{行业} trade show {国家} exhibitor list 2026` 找名录页，筛「distributor / wholesaler / supplier」标签。
 
-## 4. 海关数据（免费额度）
+### F. 各国光伏协会会员名录
+
+协会官网的会员/企业数据库 = 官方认证的经销商/安装商：
+
+- 德国 BSW（`solarwirtschaft.de`）、法国 Enerplan（`enerplan.asso.fr`）、西班牙 UNEF（`unef.es`）、荷兰 Holland Solar、欧洲级 SolarPower Europe。
+- 会员名录质量高（真实运营、合规），是 Google Maps 之外的干净渠道源。
+
+### G. 认证/并网数据库
+
+通过认证/并网的安装商/经销商 = 真实运营的渠道：
+
+- 德国 VDE / TÜV 认证安装商清单、各国并网企业清单。
+- 搜 `{国家} certified solar installer list` / `{国家} grid-connected installer registry`。
+
+### H. 本地黄页 / 商业目录
+
+Google Maps 之外的批发商补充：
+
+- 德国 `gelbeseiten.de`（黄页）、`wlw.de`（Wer liefert was）；法国 `Kompass.fr`、`PagesJaunes`。
+- 按企业分类搜批发商（Großhandel / grossiste / mayorista），能补 Google Maps 漏掉的黄页入驻批发商。
+
+### I. 海关数据（验证进口实锤）
 
 查谁在向目标国进口我方品牌/品类，直接定位真实进口商。
 
 ⚠️ **ImportYeti 实测结论（2026-09 验证）**：
-- **数据是美国海关（U.S. Imports），不是欧洲**。搜 Deye 出的是宁波德业工厂出口到美国的 815 单提单 + 美国进口商，对欧洲经销商帮助有限。
-- **Cloudflare Turnstile 反爬**：自动化浏览器（chrome-devtools/playwright）会被卡在「正在验证」页面，即使已登录也无法自动通过。只能人工在真实浏览器里手动查。
-- 结论：ImportYeti 适合做**北美市场**（查 Deye/Sol-Ark 的美国进口商），不适合欧洲；且只能人工操作。
+- **数据是美国海关（U.S. Imports），不是欧洲**。搜 Deye 出的是宁波德业工厂出口到美国的提单 + 美国进口商，对欧洲帮助有限。
+- **Cloudflare Turnstile 反爬**：自动化浏览器被卡「正在验证」，只能人工在真实浏览器查。
+- 结论：ImportYeti 适合**北美市场**，不适合欧洲；只能人工操作。
 
-**欧洲海关数据替代**：
-- 欧盟关税数据库（TARIC / Access2Markets）：查 HS code 关税，不给进口商名单
-- 各国海关公开数据（部分国家开放，需逐国找）
-- 国内平台：网易外贸通、52wmb、外贸邦 —— 免费额度查 HS code 对应进口商，但欧洲覆盖同样有限
-- 搜 `{国家} customs import data {品类}` 或 `{品牌} importer of record {国家}`
+**欧洲海关替代**：欧盟 TARIC/Access2Markets（只给关税，不给进口商）、各国海关公开数据（部分开放）、国内平台（网易外贸通/52wmb/外贸邦，欧洲覆盖有限）。
 
-**注意**：海关数据只给公司名 + 货值 + 品类，联系方式/官网要 WebSearch 补；免费额度有限，优先查已确定的重点目标。海关数据源整体上「北美好用、欧洲鸡肋」，欧洲获客优先靠 Google Search + 品牌官网 + 展会名录。
+### J. LinkedIn（决策人触达，半自动）
 
-## 优先级建议
+- Sales Navigator 搜 `solar distributor` + 国家 → 经销商公司 + 决策人。
+- ⚠️ 撞登录墙，脚本难抓，手动/半自动，作为触达决策人的补充，不做批量主力。
 
-1. **品牌官网 Find-a-Distributor**（最准，先做）
-2. **Google Search 品牌+国家+渠道词**（最全，主力）
-3. **展会名录**（补充真实贸易商）
-4. **海关数据**（验证进口实锤，重点目标才查）
-5. **Google Maps**（兜底本地小批发商/安装商，降级为补充源）
+## 多源并行原则
+
+- **不分主次、不分先后**：所有途径一起上，每个源都尽可能挖，不因为"某源命中少"就跳过。
+- **叠加不替代**：不同源覆盖不同盲区（Google Maps 覆盖有实体仓库的、ENF 覆盖目录入驻的、协会覆盖合规认证的、搜索 API 覆盖线上批发商），一条渠道漏掉的另一条补上。
+- **交叉去重**：同一公司多源撞出时，按官网域名合并，保留字段最全/评分最高那条（见 `SKILL.md` 第四步）。
+- **反幻觉铁律贯穿**：每个源的线索都要进官网背调验证，不能凭目录/搜索标题就认定是经销商。
