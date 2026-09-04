@@ -13,6 +13,9 @@
   /companies            企业库检索（电话/企业名/域名），行内快捷换池
   /pool                 客户池总览（五池统计 + 各池列表 + 换池轨迹）
   /companies/<main_id>  企业详情（全字段 + 客户池轨迹 + 换池备注）
+  /research             市调任务列表（历史 + 过期标记）
+  /research/new         新建市调任务（目标国家 + 执行人 + 缓存天数）
+  /research/<mr_id>     市调详情（各国热度研判录入 + 得分排序 + 复盘报告）
 
 启动:
     python webapp/app.py        # 端口 8766，自动打开浏览器
@@ -30,11 +33,14 @@ PROJECT_ROOT = os.path.dirname(APP_DIR)
 SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
-from core import (build_report, change_pool, get_company, ingest_leads,
-                  list_companies, list_diffs, list_pool_log, list_tasks,
-                  pool_stats, review_diff, start_task)
+from core import (build_report, change_pool, finish_research, get_company,
+                  get_research, ingest_leads, list_companies, list_diffs,
+                  list_pool_log, list_research, list_tasks, pool_stats,
+                  review_diff, save_country_score, start_research, start_task)
 from db import POOLS, get_conn, init_db
 from render_task_report import render_md, render_report
+from render_research_report import (render_md as render_research_md,
+                                    render_report as render_research_report)
 
 PORT = 8766
 
@@ -174,6 +180,75 @@ def company_change_pool(main_id):
     except ValueError as e:
         return render_template("error.html", msg=str(e)), 400
     return redirect(next_url)
+
+
+@app.route("/research", methods=["GET"])
+def research():
+    items = list_research()
+    return render_template("research.html", items=items)
+
+
+@app.route("/research/new", methods=["GET", "POST"])
+def research_new():
+    if request.method == "POST":
+        countries_raw = (request.form.get("countries") or "").strip()
+        executor = (request.form.get("executor") or "本地本机").strip()
+        try:
+            cache_days = int(request.form.get("cache_days") or 7)
+        except ValueError:
+            cache_days = 7
+        countries = [c.strip().upper() for c in countries_raw.replace("，", ",").split(",") if c.strip()]
+        if not countries:
+            return render_template("error.html", msg="至少填一个目标国家"), 400
+        mr_id = start_research(countries=countries, executor=executor, cache_days=cache_days)
+        return redirect(url_for("research_detail", mr_id=mr_id))
+    return render_template("research_new.html")
+
+
+@app.route("/research/<mr_id>", methods=["GET"])
+def research_detail(mr_id):
+    try:
+        data = get_research(mr_id)
+    except ValueError as e:
+        return render_template("error.html", msg=str(e)), 404
+    task = data["task"]
+    scores = data["scores"]
+    scored_countries = {s["country"] for s in scores}
+    return render_template("research_detail.html", task=task, scores=scores,
+                           scored_countries=scored_countries)
+
+
+@app.route("/research/<mr_id>/score", methods=["POST"])
+def research_score(mr_id):
+    country = (request.form.get("country") or "").strip().upper()
+    try:
+        save_country_score(
+            mr_id, country,
+            score=request.form.get("score") or 0,
+            positives=(request.form.get("positives") or "").strip(),
+            negatives=(request.form.get("negatives") or "").strip(),
+            risks=(request.form.get("risks") or "").strip(),
+            sources=(request.form.get("sources") or "").strip(),
+        )
+    except ValueError as e:
+        return render_template("error.html", msg=str(e)), 400
+    return redirect(url_for("research_detail", mr_id=mr_id))
+
+
+@app.route("/research/<mr_id>/finish", methods=["POST"])
+def research_finish(mr_id):
+    try:
+        finish_research(mr_id)
+    except ValueError as e:
+        return render_template("error.html", msg=str(e)), 400
+    return redirect(url_for("research_detail", mr_id=mr_id))
+
+
+@app.route("/research/<mr_id>/report.md", methods=["GET"])
+def research_report_md(mr_id):
+    md, out = render_research_report(mr_id)
+    return app.response_class(md, mimetype="text/markdown; charset=utf-8",
+                              headers={"Content-Disposition": f"attachment; filename=市场洞察复盘报告_{mr_id}.md"})
 
 
 def main():

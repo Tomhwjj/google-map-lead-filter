@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}{{ task.mr_id }} · 市调详情{% endblock %}
+{% block content %}
+<h1>市调详情</h1>
+<p class="hint">
+  <code>{{ task.mr_id }}</code> ·
+  覆盖国家：{{ task.countries_list | join('、') }} ·
+  执行人：{{ task.executor or '—' }}
+  <a href="{{ url_for('research') }}" style="margin-left:8px;">← 返回市调列表</a>
+</p>
+
+{% if task.expired %}<p class="error">⚠️ 缓存已过期（{{ task.cache_expires_at }}），建议重搜更新热度。</p>{% endif %}
+
+<div class="stats">
+  <div class="stat"><b>{{ scores | length }}</b><span>已评国家</span></div>
+  <div class="stat"><b>{{ task.countries_list | length }}</b><span>覆盖国家</span></div>
+  <div class="stat"><b>{{ task.status }}</b><span>状态</span></div>
+  <div class="stat"><b>{{ task.cache_expires_at or '—' }}</b><span>缓存截止</span></div>
+</div>
+
+<div class="row">
+  <a class="btn" href="{{ url_for('research_report_md', mr_id=task.mr_id) }}">导出复盘报告(.md)</a>
+  {% if task.status != 'done' %}
+  <form method="post" action="{{ url_for('research_finish', mr_id=task.mr_id) }}" class="inline">
+    <button>结束任务</button>
+  </form>
+  {% endif %}
+</div>
+
+<h2>各国热度得分（降序）</h2>
+{% if scores %}
+<table>
+  <thead><tr><th>排名</th><th>国家</th><th>热度</th><th>核心利好</th><th>核心利空</th><th>来源</th></tr></thead>
+  <tbody>
+  {% for s in scores %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ s.country }}</td>
+      <td><b>{{ s.score }}</b></td>
+      <td>{{ s.positives or '—' }}</td>
+      <td>{{ s.negatives or '—' }}</td>
+      <td>{{ s.sources or '—' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="empty">尚未录入任何国家研判。用下方表单逐个录入。</p>{% endif %}
+
+<h2>录入 / 更新国家研判</h2>
+<form method="post" action="{{ url_for('research_score', mr_id=task.mr_id) }}" class="form">
+  <label>国家</label>
+  <select name="country">
+    {% for c in task.countries_list %}
+    <option value="{{ c }}">{{ c }}{{ '（已填）' if c in scored_countries else '' }}</option>
+    {% endfor %}
+  </select>
+  <label>热度得分（0–100）</label>
+  <input type="number" name="score" min="0" max="100" value="50" required>
+  <label>核心利好摘要（政策/装机增速/需求强度…）</label>
+  <textarea name="positives" rows="2" placeholder="例：储能补贴延续，户储装机同比 +30%"></textarea>
+  <label>核心利空摘要（贸易壁垒/限制/竞争…）</label>
+  <textarea name="negatives" rows="2" placeholder="例：关税上调、市场饱和"></textarea>
+  <label>风险点清单（每行一条）</label>
+  <textarea name="risks" rows="2" placeholder="例：准入认证周期长&#10;分销渠道被巨头垄断"></textarea>
+  <label>信息来源快照（URL / 来源，每行一条）</label>
+  <textarea name="sources" rows="2" placeholder="例：https://…（政策原文）&#10;某行业报告"></textarea>
+  <div class="row">
+    <button type="submit" class="primary">保存研判</button>
+  </div>
+</form>
+{% endblock %}

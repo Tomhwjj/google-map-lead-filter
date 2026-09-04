@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}市调{% endblock %}
+{% block content %}
+<h1>市场趋势洞察（市调）</h1>
+<p class="hint">Agent 深度研判各国市场热度（0–100），系统存档 + 生成复盘报告 + 缓存 7 天自动过期。<a href="{{ url_for('research_new') }}">＋ 新建市调任务</a></p>
+
+{% if items %}
+<table>
+  <thead><tr><th>市调 ID</th><th>覆盖国家</th><th>执行人</th><th>开始</th><th>状态</th><th>已评/总数</th><th>均分</th><th>缓存</th><th></th></tr></thead>
+  <tbody>
+  {% for r in items %}
+    <tr>
+      <td><code>{{ r.mr_id }}</code></td>
+      <td>{{ r.countries_list | join('、') }}</td>
+      <td>{{ r.executor or '' }}</td>
+      <td>{{ r.started_at or '' }}</td>
+      <td>
+        {{ '已完成' if r.status == 'done' else '进行中' }}
+        {% if r.expired %}<span class="error">⚠️ 过期</span>{% endif %}
+      </td>
+      <td>{{ r.score_count }}/{{ r.countries_list | length }}</td>
+      <td>{{ r.avg_score if r.avg_score is not none else '—' }}</td>
+      <td>{{ r.cache_expires_at or '' }}</td>
+      <td><a href="{{ url_for('research_detail', mr_id=r.mr_id) }}">详情</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">还没有市调任务，<a href="{{ url_for('research_new') }}">新建第一个</a>。</p>
+{% endif %}
+{% endblock %}

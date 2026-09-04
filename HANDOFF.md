@@ -5,17 +5,19 @@
 
 ## 明日待办（最近优先，做完划掉）
 
-> **当前状态（2026-09-04 客户池模块完成）**：数据层 + 获客模块 + 客户池模块落地——SQLite 企业库（5 表）+ MAIN_ID + 三段式比对 + 复刻报告 + 客户池五分类（换池 + `pool_log` 轨迹），交互全封装成 Flask Web UI（`webapp/app.py`，8766，页面：仪表盘/新建任务/入库/差异审核/客户池/企业库/企业详情）。**下一步：市调模块**（热度 0-100 评分 + 复盘报告，复用 webapp 框架，下一条）。
+> **当前状态（2026-09-04 市调模块完成，三大模块全落地）**：数据层 + 获客 + 客户池 + 市调四块落地——SQLite 企业库（7 表）+ MAIN_ID + 三段式比对 + 复刻报告 + 客户池五分类（换池 + `pool_log` 轨迹）+ 市调热度研判（0-100 + 复盘报告 + 缓存 7 天过期），交互全封装成 Flask Web UI（`webapp/app.py`，8766，页面：仪表盘/市调/新建任务/入库/差异审核/客户池/企业库/企业详情）。**下一步：三模块联调 + 真实数据全流程验证**（市调定国家 → 获客入库 → 客户池跟进，下一条）。
 
 - [x] ~~兜底 8 家~~（WebSearch 9/9 成功、kitesurf 超时降级）：50/50 全判档、0 未确认；纠正 Jäger Fischer 误归类 / Solarscouts 真卖 Deye / BOGA 破产风险
 - [x] ~~修 Solarscouts 误标~~：WebSearch 证明它是电商真卖 Deye（电池/逆变器有价），无需降级——反而暴露「片段不足以定卖 vs 提及」双向教训（已固化 rule）
 - [x] ~~传竞品品牌重跑 backfill~~：三组品牌 + `--deye`（品牌页抓到我方才停）+ `--no-proxy-server`（直连不读系统代理）重跑 50 家成功——4 家卖 Deye 恢复、9 家竞品命中；7 家光伏批发商 brands 空但 body 明确光伏品类 → product_tier 手工判 competitor（增量 24）落地 score_leads.py
 - [x] ~~**客户池模块**（第二阶段）~~：五分类操作 UI（`/pool` 总览 + 企业详情 + 行内换池）+ `pool_log` 轨迹时间戳，已落地并验证
-- [ ] **市调模块**（第三阶段）：热度 0-100 评分 + 复盘报告 UI；复用 webapp 框架 + `db.py`/`core.py`
+- [x] ~~**市调模块**（第三阶段）~~：热度 0-100 研判录入 + 市场洞察复盘报告 + 缓存 7 天过期，已落地并验证
+- [ ] **三模块联调 + 真实数据全流程**：市调定国家 → 获客入库 → 客户池跟进，用真实数据端到端跑一遍
 
 ## 改动记录（按日倒序）
 
 - **2026-09-04**
+  - **市调模块（第三阶段）落地**：市场趋势洞察——热度 0-100 研判 + 市场洞察复盘报告 + 缓存 7 天过期。`db.py` 加 `market_tasks`/`country_scores` 两表 + `gen_mr_id`；`core.py` 加 `start_research`/`finish_research`/`save_country_score`/`list_research`/`get_research`/`is_expired`；新增 `scripts/render_research_report.py`；webapp 加 `/research`（列表 + 过期标记）/`/research/new`/`/research/<mr_id>`（各国研判录入 + 得分降序）/`/research/<mr_id>/report.md`。热度由 Agent 深度研判后录入（7 维度），非脚本自动算。验证：core（建任务 / 7 天缓存 / UPSERT / 越界拦截 / 过期判断 / 降序）+ Flask（建任务 302 / 详情表单 / 填分 302 / 复盘报告含得分）
   - **客户池模块（第二阶段）落地**：五分类客户池操作 UI + `pool_log` 轨迹时间戳。`core.py` 加 `change_pool`/`list_pool_log`/`pool_stats`/`get_company` 纯函数；webapp 加 `/pool` 总览（五池统计 + 各池列表 + 换池轨迹）、`/companies/<main_id>` 企业详情（全字段 + 轨迹 + 换池备注）、`/companies/<main_id>/pool` 换池 POST；企业库列表行内换池。验证：core 纯函数（换池 / 同池 skip / 非法池拦截 / 轨迹）+ Flask test_client（五池统计 / 换池 302 / 详情轨迹 / 池筛选）
   - **封装第一阶段（数据层 + Web UI）落地**：按架构文档建 SQLite 企业库 + MAIN_ID + 任务时间戳 + 三段式比对 + 复刻报告，交互封装成 Flask Web UI（8766）。新增 `scripts/db.py`（5表）/ `scripts/core.py`（纯函数 start_task/ingest_leads/build_report）/ `scripts/render_task_report.py` / `webapp/`（页面：仪表盘/新建任务/入库/差异审核/企业库）。50 家德国线索验证通过（50新增→幂等全重复→改1条phone进差异）。修正「fetch_enf 已用 SQLite」过时说法（实测全 scripts 零 SQL）
   - 传竞品品牌重跑 backfill 完成（三组品牌 + `--deye` + `--no-proxy-server` 直连）：50 家全成功，4 家卖 Deye（Rongstar/Greenlimon/SolarV/Solarscouts）、9 家竞品命中；7 家光伏批发商 brands 空但 body 明确光伏品类（德国品牌墙 JS 动态/图片，backfill 抓不到品牌名）→ product_tier 手工判 competitor（增量 24）落地 score_leads.py；K.H.Moelle 纯电气淘汰；最终 UI 头部 A13/B35/C2，卖 Deye 4 家

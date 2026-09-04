@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}新建市调任务{% endblock %}
+{% block content %}
+<h1>新建市调任务</h1>
+<p class="hint">填目标国家（逗号分隔）→ 生成市调任务 ID → 进入详情页录入各国热度研判（Agent 深度调研后填）。</p>
+
+<form method="post" class="form">
+  <label>目标国家（逗号分隔，如 DE,FR,NL,IT,ES）</label>
+  <input type="text" name="countries" placeholder="DE,FR,NL,IT,ES" required>
+  <label>执行人（本地本机）</label>
+  <input type="text" name="executor" value="本地本机">
+  <label>缓存有效期（天，默认 7，过期自动重搜）</label>
+  <input type="number" name="cache_days" value="7" min="1" max="90">
+  <div class="row">
+    <button type="submit" class="primary">创建市调任务</button>
+    <a href="{{ url_for('research') }}" class="btn" style="background:#fff;color:#16a34a !important;border:1px solid #e5e7eb;">返回</a>
+  </div>
+</form>
+{% endblock %}

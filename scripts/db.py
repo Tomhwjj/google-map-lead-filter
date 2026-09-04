@@ -3,12 +3,14 @@
 """
 数据层：SQLite 企业库（本地私有化获客系统的持久化底座）。
 
-5 张表：
+7 张表：
   companies      — 企业主表（main_id 主键，全字段 + 客户池 pool + 时间戳轨迹）
   tasks          — 获客任务表（task_id 主键，起止时间戳 / 时长 / 关键词快照 / 数据源清单）
   task_companies — 任务 ↔ 企业关联（task_id + main_id，action: new/dup/diff）
   diffs          — 差异待核验队列（新旧值冲突，status pending/approved/rejected，人工审核）
   pool_log       — 客户池状态轨迹（main_id + from/to + 时间戳 + 操作人 + 备注）
+  market_tasks   — 市调任务表（mr_id 主键，覆盖国家 / 执行人 / 时间戳 / 缓存 7 天过期）
+  country_scores — 各国热度得分（mr_id + country，0-100 分 + 利好利空 / 风险 / 来源快照）
 
 被 core.py / webapp 共用；也可直接跑初始化：
     python db.py                 # 用默认库路径初始化
@@ -128,6 +130,35 @@ CREATE INDEX IF NOT EXISTS idx_companies_name ON companies(name_key);
 CREATE INDEX IF NOT EXISTS idx_companies_pool ON companies(pool);
 CREATE INDEX IF NOT EXISTS idx_diffs_status ON diffs(status);
 CREATE INDEX IF NOT EXISTS idx_task_companies_task ON task_companies(task_id);
+
+CREATE TABLE IF NOT EXISTS market_tasks (
+    mr_id            TEXT PRIMARY KEY,
+    countries        TEXT,
+    executor         TEXT,
+    started_at       TEXT,
+    finished_at      TEXT,
+    duration_sec     INTEGER,
+    status           TEXT DEFAULT 'running',
+    cache_expires_at TEXT,
+    report_path      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS country_scores (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    mr_id      TEXT,
+    country    TEXT,
+    score      INTEGER,
+    positives  TEXT,
+    negatives  TEXT,
+    risks      TEXT,
+    sources    TEXT,
+    created_at TEXT,
+    updated_at TEXT,
+    UNIQUE(mr_id, country)
+);
+
+CREATE INDEX IF NOT EXISTS idx_country_scores_mr ON country_scores(mr_id);
+CREATE INDEX IF NOT EXISTS idx_market_tasks_status ON market_tasks(status);
 """
 
 
@@ -157,6 +188,11 @@ def gen_main_id(country=""):
 def gen_task_id():
     """生成全局唯一任务 ID：T{时间戳}-{4位随机}。"""
     return f"T{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4]}"
+
+
+def gen_mr_id():
+    """生成全局唯一市调任务 ID：MR{时间戳}-{4位随机}。"""
+    return f"MR{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4]}"
 
 
 def normalize_domain(url):

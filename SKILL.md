@@ -151,6 +151,19 @@ python scripts/serve_report.py report.html
 
 **铁律**：池子状态 100% 人工，Agent 不自动判定。换池也可命令行直调 `scripts/core.py`（`change_pool` / `pool_stats` / `list_pool_log` / `get_company`）。
 
+### 第十一步：市调（市场趋势洞察）
+
+获客前先研判**国家市场热度**、定获客优先级（可选前置，独立成模块）：
+
+1. **新建市调任务**（`/research/new`）：填目标国家列表 + 执行人 + 缓存天数（默认 7）。
+2. **Agent 深度全网研判**：按 7 维度综合研判——最新政策（补贴/准入/关税）、市场装机增速、本土经销商活跃度、进口需求强度、贸易壁垒与限制政策、行业新闻情绪、竞品动态与供应链活跃度。
+3. **录入热度得分**（`/research/<mr_id>`）：每国 0-100 分 + 核心利好/利空摘要 + 风险点清单 + 来源快照。
+4. **导出市场洞察复盘报告.md**（`/research/<mr_id>/report.md`），作后续获客与国家优先级决策依据。
+
+**缓存铁律**：市调结果默认 7 天有效，过期自动标「⚠️ 过期」提示重搜。
+
+**热度由 Agent 深度研判后录入**（非脚本按新闻条数简单排序），系统只做持久化 + 复盘报告 + 过期管理。命令行直调 `scripts/core.py`（`start_research` / `save_country_score` / `get_research` / `list_research`）。
+
 ## 反幻觉铁律
 
 - 不编造公司、邮箱、联系人、代理品牌、规模 —— 只写来源能验证的事实。
@@ -178,6 +191,7 @@ python scripts/serve_report.py report.html
 - `scripts/render_report.py` — 线索 HTML 报告生成器（读 `leads_final.json` → 自包含 HTML）
 - `scripts/serve_report.py` — 本地 HTTP 服务器打开报告（解决 file:// 拦截外链）
 - `scripts/db.py` — SQLite 数据层（5 表 schema + MAIN_ID + 去重键，被 core/webapp 共用）
-- `scripts/core.py` — 业务逻辑纯函数（任务生命周期 / 三段式比对 / 客户池换池轨迹 / 报告数据，CLI 与 UI 共用）
+- `scripts/core.py` — 业务逻辑纯函数（任务生命周期 / 三段式比对 / 客户池换池轨迹 / 市调热度研判 / 报告数据，CLI 与 UI 共用）
 - `scripts/render_task_report.py` — 复刻报告 md 生成器（架构文档第三节固定结构）
-- `webapp/app.py` — 本地 Web 管理后台（Flask，入库/差异审核/企业库/客户池/复刻报告）
+- `scripts/render_research_report.py` — 市场洞察复盘报告 md 生成器（架构文档第一节固定结构）
+- `webapp/app.py` — 本地 Web 管理后台（Flask，市调/入库/差异审核/企业库/客户池/复刻报告）

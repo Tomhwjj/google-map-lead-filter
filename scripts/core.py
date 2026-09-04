@@ -20,10 +20,11 @@
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from db import (DEFAULT_DB, DEFAULT_POOL, POOLS, gen_main_id, gen_task_id,
-                get_conn, init_db, normalize_domain, normalize_name, now_iso)
+from db import (DEFAULT_DB, DEFAULT_POOL, POOLS, gen_main_id, gen_mr_id,
+                gen_task_id, get_conn, init_db, normalize_domain,
+                normalize_name, now_iso)
 
 # 判定「差异」的关键字段 + 归一化函数（normalize 后比较，忽略格式差异）
 KEY_FIELDS = [
@@ -382,6 +383,131 @@ def get_company(main_id, db_path=None):
         (main_id,)).fetchall()]
     conn.close()
     return {"company": dict(c), "pool_log": logs}
+
+
+# ---------------------------------------------------------------------------
+# 市调模块（市场趋势洞察）：热度 0-100 研判 + 复盘报告 + 缓存 7 天过期
+# 热度得分由 Agent 深度全网研判后录入（非脚本自动算），系统只持久化 + 报告 + 过期。
+# ---------------------------------------------------------------------------
+
+CACHE_DEFAULT_DAYS = 7
+
+
+def _parse_dt(s):
+    """解析 ISO 时间戳，失败返回 None。"""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None
+
+
+def is_expired(cache_expires_at, now=None):
+    """缓存是否过期（默认 7 天）。"""
+    exp = _parse_dt(cache_expires_at)
+    if not exp:
+        return False
+    return (now or datetime.now()) > exp
+
+
+def start_research(countries=None, executor="本地本机", cache_days=CACHE_DEFAULT_DAYS,
+                   db_path=None):
+    """开始市调任务：生成 mr_id、写时间戳 + 覆盖国家 + 缓存过期时间。返回 mr_id。"""
+    conn = init_db(db_path)
+    mr_id = gen_mr_id()
+    now = now_iso()
+    expires = (datetime.now() + timedelta(days=cache_days)).isoformat(timespec="seconds")
+    cs = json.dumps(countries or [], ensure_ascii=False)
+    conn.execute(
+        "INSERT INTO market_tasks (mr_id, countries, executor, started_at, status, cache_expires_at) "
+        "VALUES (?,?,?,?, 'running', ?)",
+        (mr_id, cs, executor, now, expires))
+    conn.commit()
+    conn.close()
+    return mr_id
+
+
+def finish_research(mr_id, db_path=None):
+    """结束市调任务：写结束时间戳 + 时长，status done。"""
+    conn = init_db(db_path)
+    row = conn.execute("SELECT started_at FROM market_tasks WHERE mr_id=?", (mr_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise ValueError(f"市调任务不存在: {mr_id}")
+    now = now_iso()
+    duration = None
+    if row["started_at"]:
+        try:
+            duration = int((datetime.now() - datetime.fromisoformat(row["started_at"])).total_seconds())
+        except Exception:
+            pass
+    conn.execute(
+        "UPDATE market_tasks SET finished_at=?, duration_sec=?, status='done' WHERE mr_id=?",
+        (now, duration, mr_id))
+    conn.commit()
+    conn.close()
+    return {"mr_id": mr_id, "finished_at": now, "duration_sec": duration}
+
+
+def save_country_score(mr_id, country, score, positives="", negatives="",
+                       risks="", sources="", db_path=None):
+    """保存/更新某国家热度研判（UPSERT）。score 须 0-100 整数。"""
+    try:
+        score = int(score)
+    except (TypeError, ValueError):
+        raise ValueError(f"热度得分须 0-100 整数，收到 {score}")
+    if not 0 <= score <= 100:
+        raise ValueError(f"热度得分须 0-100，收到 {score}")
+    conn = init_db(db_path)
+    if not conn.execute("SELECT 1 FROM market_tasks WHERE mr_id=?", (mr_id,)).fetchone():
+        conn.close()
+        raise ValueError(f"市调任务不存在: {mr_id}")
+    now = now_iso()
+    country = (country or "").strip().upper()
+    conn.execute(
+        "INSERT INTO country_scores (mr_id, country, score, positives, negatives, risks, sources, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(mr_id, country) DO UPDATE SET score=excluded.score, positives=excluded.positives, "
+        "negatives=excluded.negatives, risks=excluded.risks, sources=excluded.sources, updated_at=excluded.updated_at",
+        (mr_id, country, score, positives, negatives, risks, sources, now, now))
+    conn.commit()
+    conn.close()
+    return {"mr_id": mr_id, "country": country, "score": score}
+
+
+def list_research(limit=100, db_path=None):
+    """市调任务列表（倒序），附各国得分统计 + 过期标记。"""
+    conn = init_db(db_path)
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM market_tasks ORDER BY started_at DESC LIMIT ?", (limit,)).fetchall()]
+    for r in rows:
+        sc = conn.execute(
+            "SELECT COUNT(*) AS n, AVG(score) AS avg FROM country_scores WHERE mr_id=?",
+            (r["mr_id"],)).fetchone()
+        r["score_count"] = sc["n"]
+        r["avg_score"] = round(sc["avg"], 1) if sc["avg"] is not None else None
+        r["countries_list"] = json.loads(r.get("countries") or "[]")
+        r["expired"] = is_expired(r.get("cache_expires_at"))
+    conn.close()
+    return rows
+
+
+def get_research(mr_id, db_path=None):
+    """取市调任务详情 + 各国得分（按热度降序）。"""
+    conn = init_db(db_path)
+    task = conn.execute("SELECT * FROM market_tasks WHERE mr_id=?", (mr_id,)).fetchone()
+    if not task:
+        conn.close()
+        raise ValueError(f"市调任务不存在: {mr_id}")
+    scores = [dict(r) for r in conn.execute(
+        "SELECT * FROM country_scores WHERE mr_id=? ORDER BY score DESC, country",
+        (mr_id,)).fetchall()]
+    conn.close()
+    d = dict(task)
+    d["countries_list"] = json.loads(d.get("countries") or "[]")
+    d["expired"] = is_expired(d.get("cache_expires_at"))
+    return {"task": d, "scores": scores}
 
 
 if __name__ == "__main__":
