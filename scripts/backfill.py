@@ -25,8 +25,9 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 CONTACT_PATHS = ["contact", "kontakt", "impressum", "about", "about-us",
                  "ueber-uns", "contact-us", "en/contact", "de/kontakt"]
 
-# 品牌/产品页路径（品牌未命中时抓，判断官网代理哪些品牌）
-BRAND_PATHS = ["brands", "products", "inverters", "battery-storage", "batteries", "manufacturers"]
+# 品牌/产品页路径（品牌未命中时抓，判断官网代理哪些品牌；含德语路径 marken/hersteller/produkte）
+BRAND_PATHS = ["brands", "products", "inverters", "battery-storage", "batteries",
+               "manufacturers", "marken", "hersteller", "produkte"]
 
 
 def extract_emails(text):
@@ -54,10 +55,12 @@ def main():
     ap.add_argument("--out", default="backfill.json", help="输出 JSON 路径")
     ap.add_argument("--proxy", default=DEFAULT_PROXY, help="代理地址（默认直连）")
     ap.add_argument("--max", type=int, default=0, help="最多背调条数 (0=全部)")
-    ap.add_argument("--brands", default="", help="我方合作品牌，逗号分隔，如 'Deye,Sungrow'")
+    ap.add_argument("--brands", default="", help="品牌列表（我方+贴牌+竞品），逗号分隔，如 'Deye,Sungrow,Huawei'")
+    ap.add_argument("--deye", default="", help="我方品牌（含贴牌），逗号分隔。品牌页抓到命中这些为止（命中竞品不算，继续找 Deye）")
     ap.add_argument("--fast", action="store_true", help="快速模式：只抓首页+品牌页找品牌，跳过 contact 页")
     args = ap.parse_args()
     brands = [b.strip() for b in (args.brands or "").split(",") if b.strip()]
+    deye_brands = {b.strip().lower() for b in (args.deye or "").split(",") if b.strip()}
     contact_paths = [] if args.fast else CONTACT_PATHS
     brand_paths = BRAND_PATHS[:2] if args.fast else BRAND_PATHS
     home_sleep = 0.5 if args.fast else random.uniform(1, 2)
@@ -72,6 +75,9 @@ def main():
         launch_kwargs = {"headless": True}
         if args.proxy:
             launch_kwargs["proxy"] = {"server": args.proxy}
+        else:
+            # 默认直连，不读系统代理——否则系统代理挂掉会 ERR_PROXY_CONNECTION_FAILED（2026-09 实测 38/50 家失败）
+            launch_kwargs["args"] = ["--no-proxy-server"]
         browser = p.chromium.launch(**launch_kwargs)
         ctx = browser.new_context(user_agent=UA, locale="en-US",
                                   viewport={"width": 1280, "height": 800})
@@ -131,10 +137,16 @@ def main():
                     rec["brands_found"] = list(ctx.keys())
                     rec["brands_context"] = ctx
 
-                # 品牌页（品牌未命中时再抓，命中即停）
-                if brands and not rec["brands_found"]:
+                # 品牌页（没确认卖我方品牌时继续抓——命中竞品不代表排除卖 Deye）
+                # 传了 --deye：抓到命中我方品牌才停；没传：命中任意品牌即停（原逻辑）
+                def should_keep_going():
+                    if deye_brands:
+                        return not any((b or "").lower() in deye_brands for b in rec["brands_found"])
+                    return not rec["brands_found"]
+
+                if brands and should_keep_going():
                     for path in brand_paths:
-                        if rec["brands_found"]:
+                        if not should_keep_going():
                             break
                         try:
                             url = website.rstrip("/") + "/" + path

@@ -25,11 +25,14 @@
 对每个初筛通过的线索，脚本抓官网首页 + `contact` / `kontakt` / `impressum` / `about` 页 + 品牌页（`/brands`、`/products`、`/inverters` 等），提取：
 - 页面标题、meta description、正文文本
 - 邮箱、电话
-- **品牌命中**：用 `--brands` 传入我方品牌列表（含贴牌品牌，见 `brand-mapping.md`），在正文里搜品牌关键词，输出命中的品牌 + 上下文片段
+- **品牌命中**：用 `--brands` 传入**我方品牌 + 贴牌 + 竞品品牌**（三组清单见 `brand-mapping.md`），在正文里搜品牌关键词，输出命中的品牌 + 上下文片段
 
 ```bash
-python scripts/backfill.py leads.csv --out backfill.json --brands "Deye,Sunsynk"
+python scripts/backfill.py leads.csv --out backfill.json \
+  --brands "Deye,Sunsynk,Sol-Ark,INGE,Fusion,OHm,Noark,Huawei,Sungrow,GoodWe,Fronius,SMA,Solax,Sofar,Growatt,Kostal,SolarEdge,Enphase,Hoymiles,FoxESS,Solis"
 ```
+
+> ⚠️ **`--brands` 必须三组都传**：只传我方品牌 → `brands_found` 要么命中 Deye（存量 30）、要么空（0），竞品增量 24 档永远触发不了（德国实测 13 家大型批发商卖华为/阳光但产品匹配全 0）。
 
 > ⚠️ 脚本已用 `networkidle` 等待 JS 渲染——电商站（Shopify/Magento）的品牌列表常靠 JS 动态加载，若用 `domcontentloaded` 会漏抓（实测 HDM Solar 首页：domcontentloaded 时 Sunsynk=0，networkidle 后=5）。
 
@@ -39,13 +42,17 @@ Claude 读 `backfill.json`，按优先级判断：
 
 | 判断项 | 判据 |
 |-------|------|
-| **品牌匹配（核心）** | `brands_found` 命中我方品牌（含贴牌，见 `brand-mapping.md`）= 在卖我们的货（存量）；命中同类竞品储能/逆变器 = 有替换可能（增量）；都没命中 = 不相关 |
+| **品牌匹配（核心）** | `brands_found` 命中我方品牌（含贴牌，见 `brand-mapping.md`）= 在卖我们的货（存量）；命中同类竞品储能/逆变器 **或 body 明确自述卖光伏逆变器/储能品类** = 有替换可能（增量）；都没命中 = 不相关 |
 | 渠道类型 | 官网自述 distributor / wholesaler / Großhandel / 有批发板块；或只是 installer / 安装商 |
 | 公司规模 | 经营痕迹：官网自述 wholesale/distribution、代理几个品牌、有无仓储/物流描述、Google Maps 评分数（≈经营久）。**不看精确员工数**（长尾拿不到） |
 
 > ⚠️ `brands_found` 命中只是「提到该品牌」，要结合 `brands_context` 上下文判断是「作为经销商在销售」还是「作为竞品被提及」。判断不了标「未确认」。
 >
-> ⚠️ **`score_leads.py` 的 `sells_deye` 是机械判断**（`brands_found` 含我方品牌即算 `sells_deye=True`），**无法自动区分「销售」vs「提及」**——比价平台/信息站在品牌列表里列举 Deye 会被误标成「卖 Deye」（实测 Solarscouts）。落盘前 Claude 必须读 `brands_context` 复核：产品页/产品线/「authorized distributor / partner / Gold-Level Sales Partner」= 销售；品牌列表/比价/资讯站 = 提及，手工降级。
+> ⚠️ **`score_leads.py` 的 `sells_deye` 是机械判断**（`brands_found` 含我方品牌即算 `sells_deye=True`），**无法自动区分「销售」vs「提及」**——比价平台/信息站在品牌列表里列举 Deye 会被误标成「卖 Deye」。落盘前 Claude 必须读 `brands_context` 复核：产品页/产品线/「authorized distributor / partner / Gold-Level Sales Partner」= 销售；品牌列表/比价/资讯站 = 提及，手工降级。
+>
+> ⚠️ **片段不足以定「销售 vs 提及」，异常公司要 WebSearch 交叉验证**：`brands_context` 只给品牌词前后约 100 字片段，不足以判断整站性质。实测 Solarscouts——我凭一个品牌列表片段判成「比价平台、Deye 是提及非销售」，WebSearch 一查才发现它是电商、Deye 电池/逆变器真在售（有价）。**双向都可能错**：机械判断会把比价站误标成「卖 Deye」，人工读片段也可能把电商误判成「提及」。品牌命中但整站性质存疑（片段像列表页/比价页）时，必须 WebSearch 搜「公司名 + brand + price / buy / shop」交叉验证后再定档。
+>
+> ⚠️ **竞品增量 24 不只看 `brands_found` 品牌名**：德国光伏批发商的品牌列表大量是 JS 动态加载 / 图片品牌墙 / 德语路径（`/marken`、`/hersteller`），backfill 抓不到品牌名——但 body 明写「photovoltaik fachgroßhandel / wechselrichter / speicher」的，是明确的光伏渠道大鱼（实测 MD Enrgy / SchmitzSolar / Solar Depot / VEH Solar / Lanergy 都这样）。**品牌名抓不到 ≠ 不卖竞品**。产品匹配判「卖竞品品类」时，Claude 必须读 body 自述，不能只看 `brands_found` 空就给 0 分。
 
 ### 兜底：官网拿不到品牌 / 规模证据时
 

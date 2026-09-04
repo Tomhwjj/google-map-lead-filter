@@ -15,15 +15,43 @@
 
 > Sunsynk 逆变器由 Ningbo Deye Inverter Technology 代工，硬件与 Deye 一致，仅固件 / 监控 App 不同。Sunsynk 主要在英国、南非销售。**欧盟市场 Deye 以本牌为主**，贴牌在欧盟命中少属正常。
 
+## 竞品品牌清单（增量口径，判「卖同类竞品储能/逆变器」）
+
+「产品匹配 30 分」除了存量（卖 Deye/贴牌=30），还有**增量**（卖同类竞品储能逆变器=24，可替换）。要触发增量档，`--brands` 必须**同时传竞品品牌**——否则 `brands_found` 要么命中 Deye、要么空，竞品增量 24 永远触发不了（2026-09 德国 50 家实测：13 家大型批发商卖华为/阳光/固德威，但没传竞品 → 产品匹配全 0 分）。
+
+| 竞品品牌 | 厂商 | 品类 |
+|---------|------|------|
+| Huawei | 华为 | 储能逆变器 |
+| Sungrow | 阳光电源 | 储能逆变器 |
+| GoodWe | 固德威 | 储能逆变器 |
+| Fronius | 奥地利 | 逆变器 |
+| SMA | 德国 SMA Solar | 逆变器 |
+| Solax | 首航新能源 | 储能逆变器 |
+| Sofar | 首航 Solar | 储能逆变器 |
+| Growatt | 古瑞瓦特 | 储能逆变器 |
+| Kostal | 德国 | 逆变器 |
+| SolarEdge | 以色列 | 逆变器 |
+| Enphase | 美国 | 微逆 |
+| Hoymiles | 禾迈 | 微逆 |
+| FoxESS | 麦田能源 | 储能 |
+| Solis | 锦浪 | 逆变器 |
+
+> ⚠️ **只含储能逆变器/微逆/储能竞品，不含组件品牌**（Jinko / Longi / Trina / JA Solar 是组件品类，命中组件 ≠ 可替换储能逆变器，会误加分）。
+>
+> ⚠️ **电池竞品暂缓**（BYD / LG / Tesla / Sonnen / Varta）：Sonnen 是德语「太阳」词根（sonnenenergie 官网常见）会词边界误命中，短词 BYD/LG 也易误命中。等有实测需要再加。
+
 ## 用法
 
-背调时 `--brands` 传入我方品牌 + 所有贴牌品牌：
+背调时 `--brands` 传入**三组品牌**：我方品牌 + 贴牌 + 竞品品牌：
 
 ```bash
-python scripts/backfill.py leads.csv --out backfill.json --brands "Deye,Sunsynk,Sol-Ark,INGE,Fusion,OHm,Noark"
+python scripts/backfill.py leads.csv --out backfill.json \
+  --brands "Deye,Sunsynk,Sol-Ark,INGE,Fusion,OHm,Noark,Huawei,Sungrow,GoodWe,Fronius,SMA,Solax,Sofar,Growatt,Kostal,SolarEdge,Enphase,Hoymiles,FoxESS,Solis"
 ```
 
-命中任何一个贴牌品牌，都视为「销售我方产品」（产品匹配度给满分）。
+- 命中**贴牌品牌** → 视为「销售我方产品」（存量，产品匹配 30）
+- 命中**竞品品牌** → 「卖同类竞品储能/逆变器」（增量，产品匹配 24，可替换）
+- 都没命中 → 不相关（0）
 
 ## 如何发现贴牌关系
 

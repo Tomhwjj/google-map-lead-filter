@@ -80,10 +80,11 @@ python scripts/merge_leads.py D:/tmp/fr_gmaps/ search.csv list.csv --out merged.
 
 ### 第六步：背调
 
-1. 跑背调脚本抓官网，**用 `--brands` 传入我方品牌 + 贴牌品牌**（贴牌映射见 `references/brand-mapping.md`），在正文里搜品牌命中：
+1. 跑背调脚本抓官网，**用 `--brands` 传入我方品牌 + 贴牌 + 竞品品牌**（三组清单见 `references/brand-mapping.md`），在正文里搜品牌命中（竞品命中 = 增量 24 分，不传竞品该档触发不了）：
 
 ```bash
-python scripts/backfill.py leads.csv --out backfill.json --brands "Deye,Sunsynk"
+python scripts/backfill.py leads.csv --out backfill.json \
+  --brands "Deye,Sunsynk,Sol-Ark,INGE,Fusion,OHm,Noark,Huawei,Sungrow,GoodWe,Fronius,SMA,Solax,Sofar,Growatt,Kostal,SolarEdge,Enphase,Hoymiles,FoxESS,Solis"
 ```
 
 2. 读 `backfill.json`，逐条判断：**品牌匹配（核心，`brands_found` 是否命中我方品牌）+ 上下文确认在销售而非仅提及**、渠道类型、公司规模、近期动态。优先读 body 判品牌/规模；官网抓不动用 **kitesurf** 兜底；品牌/规模证据缺失用 **anysearch（批量）/ WebSearch（零星）** 搜「公司名 + 品牌名 + distributor」或「公司名 + wholesale/warehouse/about」补证据（兜底分工见 `references/qualification-rules.md`）。

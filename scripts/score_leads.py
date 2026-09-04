@@ -70,13 +70,43 @@ def sells_deye(brands):
     return any(any(_brand_match(b, db) for db in DEYE_BRANDS) for b in (brands or []))
 
 
-def product_score(brands):
-    """产品匹配 30：卖 Deye/贴牌=30（存量）> 卖竞品=24（增量）> 无证据=0。"""
+def product_score(lead):
+    """产品匹配 30：手工判 product_tier 优先 > 机械 brands_found。
+
+    product_tier（Claude 读 body/兜底手工判，覆盖机械判断，见 qualification-rules.md）：
+      "deye"=存量30 / "competitor"=卖竞品/光伏品类24 / "none"=不相关0；缺省用 brands_found。
+    机械兜底：brands_found 命中 Deye/贴牌=30 > 命中竞品=24 > 空=0。
+    """
+    tier = lead.get("product_tier")
+    if tier == "deye":
+        return 30
+    if tier == "competitor":
+        return 24
+    if tier == "none":
+        return 0
+    brands = lead.get("brands_found") or []
     if sells_deye(brands):
         return 30
     if brands:
         return 24
     return 0
+
+
+def product_basis(lead):
+    """产品匹配评分依据（与 product_score 对应，含手工判标注）。"""
+    tier = lead.get("product_tier")
+    if tier == "deye":
+        return "已卖Deye·存量（手工判）"
+    if tier == "competitor":
+        return "卖竞品/光伏品类·增量（手工判）"
+    if tier == "none":
+        return "不相关（手工判）"
+    brands = lead.get("brands_found") or []
+    if sells_deye(brands):
+        return "已卖Deye·存量"
+    if brands:
+        return "卖竞品·增量"
+    return "无逆变器/储能证据"
 
 
 def classify_channel(ctype):
@@ -125,13 +155,12 @@ def score_lead(lead):
     brands = lead.get("brands_found") or []
     ctype = lead.get("customer_type") or ""
 
-    prod = product_score(brands)
+    prod = product_score(lead)
     ch = classify_channel(ctype)
     tier, scale_b = read_scale(lead)
     ct = contact_tier(phone, email, website)
 
-    prod_basis = "已卖Deye·存量" if sells_deye(brands) else \
-                 ("卖竞品·增量" if brands else "无逆变器/储能证据")
+    prod_basis = product_basis(lead)
     ch_basis = {"distributor": "批发/分销商", "installer": "安装商", "retail": "零售"}[ch]
     cont_basis = CONTACT_LABEL[ct]
 
