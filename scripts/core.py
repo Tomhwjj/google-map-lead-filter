@@ -209,10 +209,46 @@ def ingest_leads(leads, task_id, dry_run=False, db_path=None):
     return stats
 
 
+def _parse_json(s):
+    """解析 JSON 字符串，空/失败返回 None。"""
+    if not s:
+        return None
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
+
+
+# 国家码 → 国际电话区号（WhatsApp 链接用，修掉 render_report 硬编码法国 +33 的债）
+_CC = {"DE": "49", "FR": "33", "NL": "31", "IT": "39", "ES": "34",
+       "GB": "44", "UK": "44", "BE": "32", "AT": "43", "PL": "48"}
+
+
+def wa_link(phone, country=""):
+    """电话 -> WhatsApp 链接（去非数字，10 位本地号按国家补区号）。"""
+    digits = re.sub(r"\D", "", phone or "")
+    if not digits:
+        return ""
+    cc = _CC.get((country or "").strip().upper(), "")
+    if len(digits) == 10 and digits.startswith("0"):
+        digits = cc + digits[1:]
+    elif len(digits) == 10 and cc:
+        digits = cc + digits
+    return f"https://wa.me/{digits}"
+
+
+# 卡片渲染所需字段（与 render_report.py 卡片结构对齐）
+CARD_COLS = ["main_id", "company_name", "country", "city", "customer_type", "phone",
+             "email", "website", "linkedin", "google_maps_url", "brands_found",
+             "sells_deye", "score", "grade", "score_detail", "score_basis",
+             "score_lt", "grade_lt", "score_detail_lt", "score_basis_lt",
+             "reason", "pool", "domain"]
+
+
 def list_companies(query="", pool=None, limit=200, db_path=None):
-    """企业库检索（电话/企业名/域名模糊匹配）。"""
+    """企业库检索（电话/企业名/域名模糊匹配），返回卡片渲染所需的完整字段。"""
     conn = init_db(db_path)
-    sql = "SELECT main_id, company_name, country, city, customer_type, phone, email, website, grade, grade_lt, sells_deye, pool, domain FROM companies"
+    sql = f"SELECT {', '.join(CARD_COLS)} FROM companies"
     conds, params = [], []
     if pool:
         conds.append("pool=?")
@@ -227,6 +263,13 @@ def list_companies(query="", pool=None, limit=200, db_path=None):
     params.append(limit)
     rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
     conn.close()
+    for r in rows:
+        r["brands_found"] = _parse_json(r.get("brands_found")) or []
+        r["score_detail"] = _parse_json(r.get("score_detail")) or {}
+        r["score_basis"] = _parse_json(r.get("score_basis")) or {}
+        r["score_detail_lt"] = _parse_json(r.get("score_detail_lt")) or {}
+        r["score_basis_lt"] = _parse_json(r.get("score_basis_lt")) or {}
+        r["wa_url"] = wa_link(r.get("phone"), r.get("country"))
     return rows
 
 

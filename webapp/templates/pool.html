@@ -1,8 +1,9 @@
 {% extends "base.html" %}
+{% from "_cards.html" import cards_block %}
 {% block title %}客户池{% endblock %}
 {% block content %}
 <h1>客户池</h1>
-<p class="hint">五分类状态 100% 人工操作，系统只记轨迹（可追溯/可复盘）。点卡片看该池企业。</p>
+<p class="hint">五分类状态 100% 人工操作，系统只记轨迹（可追溯/可复盘）。点某池看该池企业，卡片内可直接换池。</p>
 
 <div class="stats">
   {% for p in pools %}
@@ -17,34 +18,7 @@
 {% if pool %}
 <h2>{{ pool }}（{{ items | length }} 家）</h2>
 {% if items %}
-<table>
-  <thead><tr><th>企业</th><th>国家/城市</th><th>渠道</th><th>电话</th><th>邮箱</th><th>官网</th><th>头部</th><th>长尾</th><th>Deye</th><th>操作</th></tr></thead>
-  <tbody>
-  {% for c in items %}
-    <tr>
-      <td>{{ c.company_name }}</td>
-      <td>{{ c.country or '' }}/{{ c.city or '' }}</td>
-      <td>{{ c.customer_type or '' }}</td>
-      <td>{{ c.phone or '' }}</td>
-      <td>{{ c.email or '' }}</td>
-      <td>{% if c.website %}<a href="{{ c.website }}" target="_blank">官网</a>{% endif %}</td>
-      <td>{{ c.grade or '' }}</td>
-      <td>{{ c.grade_lt or '' }}</td>
-      <td>{{ '✓' if c.sells_deye else '' }}</td>
-      <td class="actions">
-        <a href="{{ url_for('company_detail', main_id=c.main_id) }}">详情</a>
-        <form method="post" action="{{ url_for('company_change_pool', main_id=c.main_id) }}" class="inline">
-          <select name="to_pool">
-            {% for p in pools %}<option value="{{ p }}" {{ 'selected' if c.pool == p }}>{{ p }}</option>{% endfor %}
-          </select>
-          <button class="muted">换池</button>
-          <input type="hidden" name="next" value="{{ url_for('pool', pool=pool) }}">
-        </form>
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
+{{ cards_block(items, pools, url_for('pool', pool=pool)) }}
 {% else %}<p class="empty">该池暂无企业。</p>{% endif %}
 <p><a href="{{ url_for('pool') }}" class="hint">← 返回客户池总览</a></p>
 {% else %}

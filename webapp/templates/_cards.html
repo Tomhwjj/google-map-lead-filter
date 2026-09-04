@@ -1,0 +1,123 @@
+{# 线索卡片双模式 UI（复刻 render_report.py 卡片规格）+ webapp 独有换池操作条。
+   用法：companies.html / pool.html 里 {{ cards_block(items, pools, next_url) }} #}
+
+{% set DIM_HEAD = [
+  ('产品匹配', '产品匹配', 30),
+  ('渠道', '渠道匹配', 25),
+  ('规模', '公司规模', 25),
+  ('触达', '触达(电话>邮箱>官网)', 20),
+] %}
+{% set DIM_TAIL = [
+  ('产品匹配', '产品匹配', 30),
+  ('渠道', '渠道匹配', 20),
+  ('规模', '公司规模', 25),
+  ('触达', '触达(电话>邮箱>官网)', 25),
+] %}
+
+{% macro grade_style(g) -%}
+{%- if g == 'A' -%}color:#16a34a;background:#ecfdf3
+{%- elif g == 'B' -%}color:#d97706;background:#fffbeb
+{%- else -%}color:#6b7280;background:#f3f4f6
+{%- endif -%}
+{%- endmacro %}
+
+{% macro render_detail(detail, basis, dims) -%}
+<div class="detail">
+{%- for key, label, mx in dims -%}
+  {%- set v = detail.get(key, 0) | int -%}
+  {%- set pct = [v * 100 // mx, 100] | min -%}
+  <div class="dim">
+    <span class="dim-name">{{ label }}</span>
+    <div class="bar"><i style="width:{{ pct }}%"></i></div>
+    <span class="dim-val">{{ v }}</span>
+    <span class="dim-basis">{{ basis.get(key, '') if basis else '' }}</span>
+  </div>
+{%- endfor -%}
+</div>
+{%- endmacro %}
+
+{% macro card(c, pools, next_url) -%}
+{%- set g = (c.grade or 'C') | upper -%}
+{%- set gl = (c.grade_lt or 'C') | upper -%}
+<article class="card" data-grade="{{ g }}" data-grade-lt="{{ gl }}"
+         data-score="{{ c.score | int }}" data-score-lt="{{ c.score_lt | int }}">
+  <div class="card-head">
+    <span class="grade head-grade" style="{{ grade_style(g) }}">{{ g }}</span>
+    <span class="grade tail-grade" style="display:none">{{ gl }}</span>
+    <h3 class="name">{{ c.company_name }}</h3>
+    {%- if c.sells_deye %}<span class="deye">✓ Deye</span>{% endif %}
+    <span class="score"><b class="score-num">{{ c.score | int }}</b><small>分</small></span>
+  </div>
+  <div class="meta">
+    <span class="ctype">{{ c.customer_type }}</span>
+    <span class="loc">{{ c.country }}{% if c.city %} · {{ c.city }}{% endif %}</span>
+    {%- for b in c.brands_found %}<span class="brand">{{ b }}</span>{% endfor %}
+  </div>
+  <div class="contacts">
+    {%- if c.phone %}<a class="chip phone" href="tel:{{ c.phone }}">📞 {{ c.phone }}</a>{% endif %}
+    {%- if c.wa_url %}<a class="chip wa" href="{{ c.wa_url }}" target="_blank">WhatsApp</a>{% endif %}
+    {%- if c.website %}<a class="chip site" href="{{ c.website }}" target="_blank">官网</a>{% endif %}
+    {%- if c.email %}<a class="chip" href="mailto:{{ c.email }}">{{ c.email }}</a>{% endif %}
+    {%- if c.linkedin %}<a class="chip" href="{{ c.linkedin }}" target="_blank">LinkedIn</a>{% endif %}
+    {%- if c.google_maps_url %}<a class="chip" href="{{ c.google_maps_url }}" target="_blank">Google Maps</a>{% endif %}
+  </div>
+  <div class="head-detail">{{ render_detail(c.score_detail, c.score_basis, DIM_HEAD) }}</div>
+  <div class="tail-detail" style="display:none">{{ render_detail(c.score_detail_lt, c.score_basis_lt, DIM_TAIL) }}</div>
+  <p class="reason"><strong>开发理由：</strong>{{ c.reason }}</p>
+  <div class="pool-bar">
+    <a class="pool-detail" href="{{ url_for('company_detail', main_id=c.main_id) }}">详情</a>
+    <span class="pool-now">池：{{ c.pool }}</span>
+    <form method="post" action="{{ url_for('company_change_pool', main_id=c.main_id) }}">
+      <select name="to_pool">
+        {%- for p in pools %}<option value="{{ p }}" {{ 'selected' if c.pool == p }}>{{ p }}</option>{% endfor %}
+      </select>
+      <button type="submit" class="muted">换池</button>
+      {%- if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+    </form>
+  </div>
+</article>
+{%- endmacro %}
+
+{% macro cards_block(items, pools, next_url) -%}
+{%- set ns = namespace(a=0, b=0, c=0, deye=0) -%}
+{%- for it in items -%}
+  {%- set g = (it.grade or 'C') | upper -%}
+  {%- if g == 'A' %}{% set ns.a = ns.a + 1 %}{% elif g == 'B' %}{% set ns.b = ns.b + 1 %}{% else %}{% set ns.c = ns.c + 1 %}{% endif -%}
+  {%- if it.sells_deye %}{% set ns.deye = ns.deye + 1 %}{% endif -%}
+{%- endfor -%}
+<div class="leads" id="leads-app">
+  <div class="toolbar">
+    <div class="mode-switch">
+      <button class="active" data-mode="head">头部模式（啃大客户）</button>
+      <button data-mode="tail">长尾模式（铺小客户）</button>
+    </div>
+    <button class="export" onclick="exportCSV()">⬇ 导出 CSV</button>
+  </div>
+  <details class="legend" open>
+    <summary>评分规则说明（依据）</summary>
+    <div class="legend-grid">
+      <div class="legend-item"><b>产品匹配 30</b><br><span>已卖Deye/贴牌=30（存量） · 卖竞品储能/逆变器=24（增量） · 无证据=0</span></div>
+      <div class="legend-item"><b>渠道 25/20</b><br><span>批发/分销商 &gt; 安装商 &gt; 零售</span></div>
+      <div class="legend-item"><b>规模 25/25</b><br><span>经营痕迹三档：头部 大型25·中型17·小型8 · 长尾 中型25·小型20·大型12 · 未确认按小型</span></div>
+      <div class="legend-item"><b>触达 20/25</b><br><span>电话(可WhatsApp) 20/25 &gt; 邮箱 14/18 &gt; 仅官网 8/10（德国因地制宜）</span></div>
+    </div>
+    <p class="legend-note">⚠️ 规模三态防幻觉：<b>经营痕迹</b>(仓库/多品牌/评分数) → 按档位 · <b>估</b>(背调过无硬证据) → 档位+「估」 · <b>未确认</b>(未背调) → 按小型档保守、不归零不假装判断。</p>
+  </details>
+  <div class="lead-stats">
+    <div class="lead-stat"><div class="num">{{ items | length }}</div><div class="lbl">线索总数</div></div>
+    <div class="lead-stat"><div class="num" style="color:#16a34a" id="stat-a">{{ ns.a }}</div><div class="lbl">A 级 · 优先跟进</div></div>
+    <div class="lead-stat"><div class="num" style="color:#d97706" id="stat-b">{{ ns.b }}</div><div class="lbl">B 级 · 培育跟进</div></div>
+    <div class="lead-stat"><div class="num" id="stat-deye">{{ ns.deye }}</div><div class="lbl">卖 Deye</div></div>
+  </div>
+  <div class="lead-filter">
+    <button class="active" data-f="all">全部</button>
+    <button data-f="A">A 级</button>
+    <button data-f="B">B 级</button>
+    <button data-f="C">C 级</button>
+  </div>
+  <div id="list">
+    {%- for it in items %}{{ card(it, pools, next_url) }}{% endfor %}
+  </div>
+</div>
+<script src="{{ url_for('static', filename='cards.js') }}"></script>
+{%- endmacro %}
