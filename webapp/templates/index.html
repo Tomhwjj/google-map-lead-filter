@@ -10,6 +10,17 @@
   <div class="stat"><b>{{ tasks | length }}</b><span>任务总数</span></div>
 </div>
 
+<h2>客户池分布</h2>
+<div class="stats">
+  {% for p in pools %}
+  <div class="stat">
+    <a href="{{ url_for('pool', pool=p) }}" style="text-decoration:none;color:inherit;">
+      <b>{{ pool_stats[p] }}</b><span>{{ p }}</span>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+
 <h2>任务列表</h2>
 {% if tasks %}
 <table>

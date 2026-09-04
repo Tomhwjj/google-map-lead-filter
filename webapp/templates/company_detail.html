@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}{{ company.company_name }} · 企业详情{% endblock %}
+{% block content %}
+<h1>{{ company.company_name }}</h1>
+<p class="hint"><code>{{ company.main_id }}</code> · 当前池：<b>{{ company.pool }}</b> · <a href="{{ url_for('companies') }}">← 返回企业库</a></p>
+
+<div class="row">
+  <form method="post" action="{{ url_for('company_change_pool', main_id=company.main_id) }}" class="form row-form" style="align-items:flex-end;">
+    <div>
+      <label>换到客户池</label>
+      <select name="to_pool">
+        {% for p in pools %}<option value="{{ p }}" {{ 'selected' if company.pool == p }}>{{ p }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>操作人</label>
+      <input type="text" name="operator" value="人工" style="max-width:140px;">
+    </div>
+    <div>
+      <label>备注</label>
+      <input type="text" name="note" placeholder="例：邮件已回、报价中…" style="min-width:240px;">
+    </div>
+    <button class="primary">确认换池</button>
+    <input type="hidden" name="next" value="{{ url_for('company_detail', main_id=company.main_id) }}">
+  </form>
+</div>
+
+<h2>客户池轨迹</h2>
+{% if logs %}
+<table>
+  <thead><tr><th>时间</th><th>从</th><th>到</th><th>操作人</th><th>备注</th></tr></thead>
+  <tbody>
+  {% for l in logs %}
+    <tr>
+      <td>{{ l.changed_at or '' }}</td>
+      <td>{{ l.from_pool or '（空）' }}</td>
+      <td>{{ l.to_pool or '' }}</td>
+      <td>{{ l.operator or '' }}</td>
+      <td>{{ l.note or '' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="empty">暂无换池记录。</p>{% endif %}
+
+<h2>基本信息</h2>
+<table>
+  <tbody>
+    <tr><th style="width:140px;">国家/城市</th><td>{{ company.country or '' }}{{ ' / ' if company.city }}{{ company.city or '' }}</td></tr>
+    <tr><th>客户类型</th><td>{{ company.customer_type or '' }}</td></tr>
+    <tr><th>电话</th><td>{{ company.phone or '' }}</td></tr>
+    <tr><th>邮箱</th><td>{{ company.email or '' }}</td></tr>
+    <tr><th>官网</th><td>{% if company.website %}<a href="{{ company.website }}" target="_blank">{{ company.website }}</a>{% endif %}</td></tr>
+    <tr><th>LinkedIn</th><td>{% if company.linkedin %}<a href="{{ company.linkedin }}" target="_blank">{{ company.linkedin }}</a>{% endif %}</td></tr>
+    <tr><th>Facebook</th><td>{{ company.facebook or '' }}</td></tr>
+    <tr><th>地址</th><td>{{ company.address or '' }}</td></tr>
+    <tr><th>评分</th><td>{{ company.rating or '' }}</td></tr>
+    <tr><th>Google Maps</th><td>{% if company.google_maps_url %}<a href="{{ company.google_maps_url }}" target="_blank">打开</a>{% endif %}</td></tr>
+    <tr><th>来源</th><td>{% if company.source_url %}<a href="{{ company.source_url }}" target="_blank">{{ company.source_url }}</a>{% endif %}</td></tr>
+  </tbody>
+</table>
+
+<h2>评分与背调</h2>
+<table>
+  <tbody>
+    <tr><th style="width:140px;">头部评分</th><td>{{ company.grade or '—' }}（{{ company.score if company.score is not none else '—' }}）</td></tr>
+    <tr><th>长尾评分</th><td>{{ company.grade_lt or '—' }}（{{ company.score_lt if company.score_lt is not none else '—' }}）</td></tr>
+    <tr><th>卖 Deye</th><td>{{ '✓ 是' if company.sells_deye else '否' }}</td></tr>
+    <tr><th>品牌命中</th><td>{% if company.brands_found is iterable and company.brands_found is not string %}{{ company.brands_found | join(', ') }}{% else %}{{ company.brands_found or '' }}{% endif %}</td></tr>
+    <tr><th>产品档</th><td>{{ company.product_tier or '' }}</td></tr>
+    <tr><th>规模档</th><td>{{ company.scale_tier or '' }}{{ '（估）' if company.scale_estimated else '' }}</td></tr>
+    <tr><th>背调</th><td>{{ '已完成' if company.backfilled else '未背调' }}</td></tr>
+    <tr><th>淘汰/备注</th><td>{{ company.reason or '' }}</td></tr>
+  </tbody>
+</table>
+
+<h2>时间戳</h2>
+<table>
+  <tbody>
+    <tr><th style="width:140px;">首次发现</th><td>{{ company.first_seen_at or '' }}（{{ company.first_seen_task or '' }}）</td></tr>
+    <tr><th>最近发现</th><td>{{ company.last_seen_at or '' }}（{{ company.last_seen_task or '' }}）</td></tr>
+    <tr><th>创建</th><td>{{ company.created_at or '' }}</td></tr>
+    <tr><th>更新</th><td>{{ company.updated_at or '' }}</td></tr>
+  </tbody>
+</table>
+{% endblock %}

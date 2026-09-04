@@ -22,8 +22,8 @@ import re
 import sys
 from datetime import datetime
 
-from db import (DEFAULT_DB, DEFAULT_POOL, gen_main_id, gen_task_id, get_conn,
-                init_db, normalize_domain, normalize_name, now_iso)
+from db import (DEFAULT_DB, DEFAULT_POOL, POOLS, gen_main_id, gen_task_id,
+                get_conn, init_db, normalize_domain, normalize_name, now_iso)
 
 # 判定「差异」的关键字段 + 归一化函数（normalize 后比较，忽略格式差异）
 KEY_FIELDS = [
@@ -311,6 +311,77 @@ def build_report(task_id, db_path=None):
         "diffs": diffs,
         "new_companies": new_companies,
     }
+
+
+def change_pool(main_id, to_pool, operator="人工", note="", db_path=None):
+    """客户池换池：更新 companies.pool + 写 pool_log 轨迹。
+
+    铁律：客户状态 100% 人工，本函数只记轨迹、不自动判定。
+    同池不变时跳过（不写空轨迹）。返回 {main_id, from_pool, to_pool, changed_at, skipped}。
+    """
+    if to_pool not in POOLS:
+        raise ValueError(f"非法客户池: {to_pool}（可选 {POOLS}）")
+    conn = init_db(db_path)
+    row = conn.execute("SELECT main_id, company_name, pool FROM companies WHERE main_id=?",
+                       (main_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise ValueError(f"企业不存在: {main_id}")
+    from_pool = row["pool"] or DEFAULT_POOL
+    now = now_iso()
+    if from_pool == to_pool:
+        conn.close()
+        return {"main_id": main_id, "from_pool": from_pool, "to_pool": to_pool,
+                "changed_at": now, "skipped": True}
+    conn.execute("UPDATE companies SET pool=?, updated_at=? WHERE main_id=?",
+                 (to_pool, now, main_id))
+    conn.execute(
+        "INSERT INTO pool_log (main_id, from_pool, to_pool, changed_at, operator, note) "
+        "VALUES (?,?,?,?,?,?)",
+        (main_id, from_pool, to_pool, now, operator, note))
+    conn.commit()
+    conn.close()
+    return {"main_id": main_id, "from_pool": from_pool, "to_pool": to_pool,
+            "changed_at": now, "skipped": False}
+
+
+def list_pool_log(main_id=None, limit=200, db_path=None):
+    """客户池状态轨迹（倒序）。可传 main_id 过滤单个企业。"""
+    conn = init_db(db_path)
+    sql = ("SELECT pl.*, c.company_name FROM pool_log pl "
+           "LEFT JOIN companies c ON pl.main_id=c.main_id ")
+    params = []
+    if main_id:
+        sql += "WHERE pl.main_id=? "
+        params.append(main_id)
+    sql += "ORDER BY pl.changed_at DESC, pl.id DESC LIMIT ?"
+    params.append(limit)
+    rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    conn.close()
+    return rows
+
+
+def pool_stats(db_path=None):
+    """五池企业数统计（空池补 0）。"""
+    conn = init_db(db_path)
+    rows = conn.execute("SELECT pool, COUNT(*) AS n FROM companies GROUP BY pool").fetchall()
+    conn.close()
+    m = {r["pool"]: r["n"] for r in rows}
+    return {p: m.get(p, 0) for p in POOLS}
+
+
+def get_company(main_id, db_path=None):
+    """取单个企业详情 + 其客户池轨迹。"""
+    conn = init_db(db_path)
+    c = conn.execute("SELECT * FROM companies WHERE main_id=?", (main_id,)).fetchone()
+    if not c:
+        conn.close()
+        raise ValueError(f"企业不存在: {main_id}")
+    logs = [dict(r) for r in conn.execute(
+        "SELECT * FROM pool_log WHERE main_id=? ORDER BY changed_at DESC, id DESC",
+        (main_id,)).fetchall()]
+    conn.close()
+    return {"company": dict(c), "pool_log": logs}
 
 
 if __name__ == "__main__":

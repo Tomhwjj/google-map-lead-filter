@@ -10,7 +10,9 @@
   /tasks/<id>/report.md 导出复刻报告
   /ingest               入库（选任务 + 贴评分 JSON → 三段式比对）
   /diffs                差异审核队列（approve 覆盖 / reject 忽略）
-  /companies            企业库检索（电话/企业名/域名）
+  /companies            企业库检索（电话/企业名/域名），行内快捷换池
+  /pool                 客户池总览（五池统计 + 各池列表 + 换池轨迹）
+  /companies/<main_id>  企业详情（全字段 + 客户池轨迹 + 换池备注）
 
 启动:
     python webapp/app.py        # 端口 8766，自动打开浏览器
@@ -28,8 +30,9 @@ PROJECT_ROOT = os.path.dirname(APP_DIR)
 SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
-from core import (build_report, ingest_leads, list_companies, list_diffs,
-                  list_tasks, review_diff, start_task)
+from core import (build_report, change_pool, get_company, ingest_leads,
+                  list_companies, list_diffs, list_pool_log, list_tasks,
+                  pool_stats, review_diff, start_task)
 from db import POOLS, get_conn, init_db
 from render_task_report import render_md, render_report
 
@@ -48,8 +51,10 @@ def index():
     pending_diffs = conn.execute("SELECT COUNT(*) FROM diffs WHERE status='pending'").fetchone()[0]
     running_tasks = conn.execute("SELECT COUNT(*) FROM tasks WHERE status='running'").fetchone()[0]
     conn.close()
+    stats = pool_stats()
     return render_template("index.html", tasks=tasks, total_companies=total_companies,
-                           pending_diffs=pending_diffs, running_tasks=running_tasks)
+                           pending_diffs=pending_diffs, running_tasks=running_tasks,
+                           pool_stats=stats, pools=POOLS)
 
 
 @app.route("/tasks/new", methods=["GET", "POST"])
@@ -126,6 +131,49 @@ def companies():
     pool = request.args.get("pool", "").strip()
     items = list_companies(query=q, pool=pool or None)
     return render_template("companies.html", items=items, q=q, pool=pool, pools=POOLS)
+
+
+@app.route("/pool", methods=["GET"])
+def pool():
+    pool_filter = request.args.get("pool", "").strip() or None
+    stats = pool_stats()
+    items = list_companies(pool=pool_filter, limit=300) if pool_filter else []
+    logs = list_pool_log(limit=50) if not pool_filter else []
+    return render_template("pool.html", stats=stats, pool=pool_filter, pools=POOLS,
+                           items=items, logs=logs)
+
+
+@app.route("/companies/<main_id>", methods=["GET"])
+def company_detail(main_id):
+    try:
+        data = get_company(main_id)
+    except ValueError as e:
+        return render_template("error.html", msg=str(e)), 404
+    company = data["company"]
+    # 解析 JSON 字段，便于模板展示
+    for f in ("brands_found", "brands_context", "score_detail", "score_basis",
+              "score_detail_lt", "score_basis_lt"):
+        v = company.get(f)
+        if isinstance(v, str) and v:
+            try:
+                company[f] = json.loads(v)
+            except Exception:
+                pass
+    return render_template("company_detail.html", company=company,
+                           logs=data["pool_log"], pools=POOLS)
+
+
+@app.route("/companies/<main_id>/pool", methods=["POST"])
+def company_change_pool(main_id):
+    to_pool = (request.form.get("to_pool") or "").strip()
+    operator = (request.form.get("operator") or "人工(webui)").strip()
+    note = (request.form.get("note") or "").strip()
+    next_url = request.form.get("next") or url_for("companies")
+    try:
+        change_pool(main_id, to_pool, operator=operator, note=note)
+    except ValueError as e:
+        return render_template("error.html", msg=str(e)), 400
+    return redirect(next_url)
 
 
 def main():

@@ -15,7 +15,7 @@
 {% if items %}
 <p class="hint">共 {{ items | length }} 条</p>
 <table>
-  <thead><tr><th>企业</th><th>国家/城市</th><th>渠道</th><th>电话</th><th>邮箱</th><th>官网</th><th>头部</th><th>长尾</th><th>Deye</th><th>客户池</th></tr></thead>
+  <thead><tr><th>企业</th><th>国家/城市</th><th>渠道</th><th>电话</th><th>邮箱</th><th>官网</th><th>头部</th><th>长尾</th><th>Deye</th><th>客户池</th><th>操作</th></tr></thead>
   <tbody>
   {% for c in items %}
     <tr>
@@ -29,6 +29,16 @@
       <td>{{ c.grade_lt or '' }}</td>
       <td>{{ '✓' if c.sells_deye else '' }}</td>
       <td>{{ c.pool or '' }}</td>
+      <td class="actions">
+        <a href="{{ url_for('company_detail', main_id=c.main_id) }}">详情</a>
+        <form method="post" action="{{ url_for('company_change_pool', main_id=c.main_id) }}" class="inline">
+          <select name="to_pool">
+            {% for p in pools %}<option value="{{ p }}" {{ 'selected' if c.pool == p }}>{{ p }}</option>{% endfor %}
+          </select>
+          <button class="muted">换池</button>
+          <input type="hidden" name="next" value="{{ url_for('companies', q=q, pool=pool) }}">
+        </form>
+      </td>
     </tr>
   {% endfor %}
   </tbody>

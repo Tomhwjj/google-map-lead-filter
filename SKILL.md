@@ -139,6 +139,18 @@ python scripts/serve_report.py report.html
 
 **铁律**：客户状态（池子/差异审核）100% 人工在 UI 操作；Agent 只采集/比对/生成报告，不自动判定客户状态。任务/入库/报告也可命令行直调 `scripts/core.py` 纯函数（`start_task` / `ingest_leads` / `build_report`）。
 
+### 第十步：客户池管理（本地 Web UI）
+
+入库后进入跟踪阶段——**五分类客户池**，状态 100% 人工在 UI 操作，系统只记轨迹（可追溯/可复盘）：
+
+1. **客户池总览**（`/pool`）：五池统计 + 各池列表 + 最近换池轨迹。
+2. **换池**：企业库列表行内或企业详情页，选目标池 + 操作人 + 备注 → 提交，自动写 `pool_log` 轨迹（时间戳 / 从 / 到 / 操作人 / 备注）。
+3. **企业详情**（`/companies/<main_id>`）：全字段 + 客户池轨迹 + 换池表单。
+
+**五池**：潜在客户(未联系) → 潜在客户(已取得联系) → 强意向客户 → 重点关注客户 → 老客户。入库默认落「潜在客户(未联系)」。
+
+**铁律**：池子状态 100% 人工，Agent 不自动判定。换池也可命令行直调 `scripts/core.py`（`change_pool` / `pool_stats` / `list_pool_log` / `get_company`）。
+
 ## 反幻觉铁律
 
 - 不编造公司、邮箱、联系人、代理品牌、规模 —— 只写来源能验证的事实。
@@ -166,6 +178,6 @@ python scripts/serve_report.py report.html
 - `scripts/render_report.py` — 线索 HTML 报告生成器（读 `leads_final.json` → 自包含 HTML）
 - `scripts/serve_report.py` — 本地 HTTP 服务器打开报告（解决 file:// 拦截外链）
 - `scripts/db.py` — SQLite 数据层（5 表 schema + MAIN_ID + 去重键，被 core/webapp 共用）
-- `scripts/core.py` — 业务逻辑纯函数（任务生命周期 / 三段式比对 / 报告数据，CLI 与 UI 共用）
+- `scripts/core.py` — 业务逻辑纯函数（任务生命周期 / 三段式比对 / 客户池换池轨迹 / 报告数据，CLI 与 UI 共用）
 - `scripts/render_task_report.py` — 复刻报告 md 生成器（架构文档第三节固定结构）
-- `webapp/app.py` — 本地 Web 管理后台（Flask，入库/差异审核/企业库/复刻报告）
+- `webapp/app.py` — 本地 Web 管理后台（Flask，入库/差异审核/企业库/客户池/复刻报告）
