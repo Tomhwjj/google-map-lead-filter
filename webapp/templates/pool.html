@@ -3,11 +3,11 @@
 {% block title %}客户池{% endblock %}
 {% block content %}
 <h1>客户池</h1>
-<p class="hint">五分类状态 100% 人工操作，系统只记轨迹（可追溯/可复盘）。点某池看该池企业，卡片内可直接换池。</p>
+<p class="hint">五分类状态 100% 人工操作，系统只记轨迹（可追溯/可复盘）。可按池 + 国家组合筛选，卡片内直接换池。</p>
 
 <div class="stats">
   {% for p in pools %}
-  <div class="stat" style="border-left: 4px solid {{ '#16a34a' if not pool or pool == p else 'transparent' }};">
+  <div class="stat" style="border-left: 4px solid {{ '#16a34a' if pool == p else 'transparent' }};">
     <a href="{{ url_for('pool', pool=p) }}" style="text-decoration:none;color:inherit;">
       <b>{{ stats[p] }}</b><span>{{ p }}</span>
     </a>
@@ -15,12 +15,24 @@
   {% endfor %}
 </div>
 
-{% if pool %}
-<h2>{{ pool }}（{{ items | length }} 家）</h2>
+<form method="get" class="form row-form">
+  <select name="country">
+    <option value="">全部国家</option>
+    {% for c in countries %}<option value="{{ c.country }}" {{ 'selected' if country == c.country }}>{{ c.name }}（{{ c.n }}）</option>{% endfor %}
+  </select>
+  <select name="pool">
+    <option value="">全部客户池</option>
+    {% for p in pools %}<option value="{{ p }}" {{ 'selected' if pool == p }}>{{ p }}</option>{% endfor %}
+  </select>
+  <button type="submit">筛选</button>
+  {% if has_filter %}<a href="{{ url_for('pool') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);">清空</a>{% endif %}
+</form>
+
+{% if has_filter %}
+<h2>{{ pool or '全部池' }}{% if country %} · {{ country }}{% endif %}（{{ items | length }} 家）</h2>
 {% if items %}
-{{ cards_block(items, pools, url_for('pool', pool=pool)) }}
-{% else %}<p class="empty">该池暂无企业。</p>{% endif %}
-<p><a href="{{ url_for('pool') }}" class="hint">← 返回客户池总览</a></p>
+{{ cards_block(items, pools, url_for('pool', pool=pool, country=country)) }}
+{% else %}<p class="empty">该筛选下暂无企业。</p>{% endif %}
 {% else %}
 <h2>最近换池轨迹</h2>
 {% if logs %}
@@ -39,6 +51,6 @@
   {% endfor %}
   </tbody>
 </table>
-{% else %}<p class="empty">暂无换池记录。在「企业库」或某池列表里点「换池」开始积累轨迹。</p>{% endif %}
+{% else %}<p class="empty">暂无换池记录。在上面选池 + 国家筛选后，在卡片里点「换池」开始积累轨迹。</p>{% endif %}
 {% endif %}
 {% endblock %}

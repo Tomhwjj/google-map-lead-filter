@@ -223,6 +223,16 @@ def _parse_json(s):
 _CC = {"DE": "49", "FR": "33", "NL": "31", "IT": "39", "ES": "34",
        "GB": "44", "UK": "44", "BE": "32", "AT": "43", "PL": "48"}
 
+# 国家码 → 中文名（市调排名 / 国家筛选下拉用，覆盖欧盟 27 国 + 乌克兰）
+COUNTRY_NAMES = {
+    "DE": "德国", "FR": "法国", "NL": "荷兰", "IT": "意大利", "ES": "西班牙",
+    "PT": "葡萄牙", "BE": "比利时", "LU": "卢森堡", "AT": "奥地利", "PL": "波兰",
+    "CZ": "捷克", "SK": "斯洛伐克", "HU": "匈牙利", "RO": "罗马尼亚", "BG": "保加利亚",
+    "HR": "克罗地亚", "SI": "斯洛文尼亚", "GR": "希腊", "CY": "塞浦路斯", "MT": "马耳他",
+    "IE": "爱尔兰", "SE": "瑞典", "DK": "丹麦", "FI": "芬兰", "EE": "爱沙尼亚",
+    "LV": "拉脱维亚", "LT": "立陶宛", "UA": "乌克兰",
+}
+
 
 def wa_link(phone, country=""):
     """电话 -> WhatsApp 链接（去非数字，10 位本地号按国家补区号）。"""
@@ -245,14 +255,17 @@ CARD_COLS = ["main_id", "company_name", "country", "city", "customer_type", "pho
              "reason", "pool", "domain"]
 
 
-def list_companies(query="", pool=None, limit=200, db_path=None):
-    """企业库检索（电话/企业名/域名模糊匹配），返回卡片渲染所需的完整字段。"""
+def list_companies(query="", pool=None, country=None, limit=200, db_path=None):
+    """企业库检索（电话/企业名/域名模糊匹配 + 国家/客户池筛选），返回卡片渲染所需完整字段。"""
     conn = init_db(db_path)
     sql = f"SELECT {', '.join(CARD_COLS)} FROM companies"
     conds, params = [], []
     if pool:
         conds.append("pool=?")
         params.append(pool)
+    if country:
+        conds.append("country=?")
+        params.append(country.strip().upper())
     if query:
         q = f"%{query}%"
         conds.append("(company_name LIKE ? OR phone LIKE ? OR domain LIKE ? OR email LIKE ?)")
@@ -270,6 +283,18 @@ def list_companies(query="", pool=None, limit=200, db_path=None):
         r["score_detail_lt"] = _parse_json(r.get("score_detail_lt")) or {}
         r["score_basis_lt"] = _parse_json(r.get("score_basis_lt")) or {}
         r["wa_url"] = wa_link(r.get("phone"), r.get("country"))
+    return rows
+
+
+def list_countries(db_path=None):
+    """企业库已入库的国家分布（国家码 + 中文名 + 企业数），供筛选下拉。"""
+    conn = init_db(db_path)
+    rows = [dict(r) for r in conn.execute(
+        "SELECT country, COUNT(*) AS n FROM companies "
+        "WHERE country IS NOT NULL AND country != '' GROUP BY country ORDER BY n DESC").fetchall()]
+    conn.close()
+    for r in rows:
+        r["name"] = COUNTRY_NAMES.get(r["country"], r["country"])
     return rows
 
 
@@ -550,7 +575,17 @@ def get_research(mr_id, db_path=None):
     d = dict(task)
     d["countries_list"] = json.loads(d.get("countries") or "[]")
     d["expired"] = is_expired(d.get("cache_expires_at"))
+    for s in scores:
+        s["country_name"] = COUNTRY_NAMES.get(s["country"], s["country"])
     return {"task": d, "scores": scores}
+
+
+def latest_research_ranking(db_path=None):
+    """最新市调任务的各国热度排名（score 降序），无任务返回 None。"""
+    items = list_research(limit=1, db_path=db_path)
+    if not items:
+        return None
+    return get_research(items[0]["mr_id"], db_path=db_path)
 
 
 if __name__ == "__main__":

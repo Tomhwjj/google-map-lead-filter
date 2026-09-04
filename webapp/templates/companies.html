@@ -6,6 +6,10 @@
 
 <form method="get" class="form row-form">
   <input type="text" name="q" value="{{ q }}" placeholder="企业名 / 电话 / 域名 / 邮箱">
+  <select name="country">
+    <option value="">全部国家</option>
+    {% for c in countries %}<option value="{{ c.country }}" {{ 'selected' if country == c.country }}>{{ c.name }}（{{ c.n }}）</option>{% endfor %}
+  </select>
   <select name="pool">
     <option value="">全部客户池</option>
     {% for p in pools %}<option value="{{ p }}" {{ 'selected' if pool == p }}>{{ p }}</option>{% endfor %}
@@ -15,6 +19,6 @@
 
 {% if items %}
 <p class="hint">共 {{ items | length }} 条 · 头部/长尾双模式可切换，分数按当前模式重算</p>
-{{ cards_block(items, pools, url_for('companies', q=q, pool=pool)) }}
+{{ cards_block(items, pools, url_for('companies', q=q, pool=pool, country=country)) }}
 {% else %}<p class="empty">无匹配企业。</p>{% endif %}
 {% endblock %}

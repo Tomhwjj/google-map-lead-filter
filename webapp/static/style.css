@@ -99,3 +99,34 @@ button.muted { color: var(--gray); }
 .result { margin-top: 20px; }
 .row-form { flex-direction: row; align-items: center; max-width: none; }
 .row-form input { flex: 1; }
+
+/* 市调：各国热度排名看板 */
+.rank-board { display: flex; flex-direction: column; gap: 12px; margin: 16px 0; }
+.rank-card {
+  display: flex; align-items: center; gap: 16px;
+  background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px 20px;
+}
+.rank-badge {
+  width: 40px; height: 40px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 16px; color: #fff; flex-shrink: 0;
+}
+.rank-1 { background: #f59e0b; }
+.rank-2 { background: #94a3b8; }
+.rank-3 { background: #b45309; }
+.rank-n { background: #e2e8f0; color: #64748b; }
+.rank-country { flex-shrink: 0; min-width: 96px; }
+.rank-name { font-size: 17px; font-weight: 700; }
+.rank-code { font-size: 12px; color: var(--gray); margin-left: 4px; }
+.rank-score { font-size: 30px; font-weight: 800; flex-shrink: 0; min-width: 56px; text-align: center; }
+.rank-body { flex: 1; font-size: 13px; }
+.rank-line { margin: 2px 0; color: #334155; }
+.rank-line b { color: var(--text); margin-right: 6px; }
+.rank-line.risk { color: #b91c1c; }
+.rank-btn {
+  flex-shrink: 0; background: var(--green); color: #fff !important;
+  text-decoration: none; padding: 10px 18px; border-radius: 8px; font-size: 14px; font-weight: 600;
+  white-space: nowrap;
+}
+.rank-btn:hover { opacity: .9; }

@@ -34,9 +34,10 @@ SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
 from core import (build_report, change_pool, finish_research, get_company,
-                  get_research, ingest_leads, list_companies, list_diffs,
-                  list_pool_log, list_research, list_tasks, pool_stats,
-                  review_diff, save_country_score, start_research, start_task)
+                  get_research, ingest_leads, latest_research_ranking,
+                  list_companies, list_countries, list_diffs, list_pool_log,
+                  list_research, list_tasks, pool_stats, review_diff,
+                  save_country_score, start_research, start_task)
 from db import POOLS, get_conn, init_db
 from render_task_report import render_md, render_report
 from render_research_report import (render_md as render_research_md,
@@ -73,7 +74,9 @@ def tasks_new():
         sources = [s.strip() for s in sources_raw.replace("，", ",").split(",") if s.strip()]
         task_id = start_task(country=country, keywords=keywords, sources=sources)
         return redirect(url_for("task_detail", task_id=task_id))
-    return render_template("tasks_new.html")
+    # GET 时支持市调排名「开始获客」预填国家
+    preset_country = (request.args.get("country") or "").strip().upper()
+    return render_template("tasks_new.html", preset_country=preset_country)
 
 
 @app.route("/tasks/<task_id>")
@@ -135,18 +138,25 @@ def diffs_review(diff_id, action):
 def companies():
     q = request.args.get("q", "").strip()
     pool = request.args.get("pool", "").strip()
-    items = list_companies(query=q, pool=pool or None)
-    return render_template("companies.html", items=items, q=q, pool=pool, pools=POOLS)
+    country = request.args.get("country", "").strip()
+    items = list_companies(query=q, pool=pool or None, country=country or None)
+    countries = list_countries()
+    return render_template("companies.html", items=items, q=q, pool=pool,
+                           country=country, pools=POOLS, countries=countries)
 
 
 @app.route("/pool", methods=["GET"])
 def pool():
     pool_filter = request.args.get("pool", "").strip() or None
+    country = request.args.get("country", "").strip() or None
     stats = pool_stats()
-    items = list_companies(pool=pool_filter, limit=300) if pool_filter else []
-    logs = list_pool_log(limit=50) if not pool_filter else []
+    countries = list_countries()
+    has_filter = bool(pool_filter or country)
+    items = list_companies(pool=pool_filter, country=country, limit=300) if has_filter else []
+    logs = list_pool_log(limit=50) if not has_filter else []
     return render_template("pool.html", stats=stats, pool=pool_filter, pools=POOLS,
-                           items=items, logs=logs)
+                           items=items, logs=logs, country=country, countries=countries,
+                           has_filter=has_filter)
 
 
 @app.route("/companies/<main_id>", methods=["GET"])
@@ -185,7 +195,8 @@ def company_change_pool(main_id):
 @app.route("/research", methods=["GET"])
 def research():
     items = list_research()
-    return render_template("research.html", items=items)
+    ranking = latest_research_ranking()
+    return render_template("research.html", items=items, ranking=ranking)
 
 
 @app.route("/research/new", methods=["GET", "POST"])

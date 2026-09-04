@@ -2,10 +2,11 @@
 {% block title %}新建任务{% endblock %}
 {% block content %}
 <h1>新建获客任务</h1>
+{% if preset_country %}<p class="hint">已从市调排名预填国家 <b>{{ preset_country }}</b>，补关键词后创建即可。</p>{% endif %}
 
 <form method="post" class="form">
   <label>目标国家（2 字母代码，如 DE / FR / NL）</label>
-  <input type="text" name="country" placeholder="DE" value="DE">
+  <input type="text" name="country" placeholder="DE" value="{{ preset_country or 'DE' }}">
 
   <label>搜索关键词（每行一个）</label>
   <textarea name="keywords" rows="6" placeholder="inverter distributor Germany&#10;battery storage wholesaler Deutschland"></textarea>

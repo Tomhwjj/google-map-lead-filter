@@ -1,10 +1,47 @@
 {% extends "base.html" %}
 {% block title %}市调{% endblock %}
 {% block content %}
-<h1>市场趋势洞察（市调）</h1>
-<p class="hint">Agent 深度研判各国市场热度（0–100），系统存档 + 生成复盘报告 + 缓存 7 天自动过期。<a href="{{ url_for('research_new') }}">＋ 新建市调任务</a></p>
+<h1>市场热度排名（开发优先级）</h1>
+<p class="hint">Agent 深度研判各国市场热度（0–100），按得分降序排开发优先级——热度高先获客。每国可直接「开始获客」。<a href="{{ url_for('research_new') }}">＋ 新建市调任务</a></p>
+
+{% if ranking and ranking.scores %}
+<div class="hint">
+  最新市调任务 <code>{{ ranking.task.mr_id }}</code> ·
+  执行人 {{ ranking.task.executor or '—' }} ·
+  缓存截止 {{ ranking.task.cache_expires_at or '—' }}
+  {% if ranking.task.expired %}<span class="error">⚠️ 过期</span>{% endif %}
+  <a href="{{ url_for('research_report_md', mr_id=ranking.task.mr_id) }}">导出复盘报告(.md)</a>
+  <a href="{{ url_for('research_detail', mr_id=ranking.task.mr_id) }}" style="margin-left:8px;">录入/更新研判</a>
+</div>
+
+<div class="rank-board">
+  {% for s in ranking.scores %}
+  {% set cls = 'rank-1' if loop.index == 1 else ('rank-2' if loop.index == 2 else ('rank-3' if loop.index == 3 else 'rank-n')) %}
+  {% set scolor = '#16a34a' if s.score >= 80 else ('#d97706' if s.score >= 50 else '#6b7280') %}
+  <div class="rank-card">
+    <div class="rank-badge {{ cls }}">{{ loop.index }}</div>
+    <div class="rank-country"><span class="rank-name">{{ s.country_name }}</span><span class="rank-code">{{ s.country }}</span></div>
+    <div class="rank-score" style="color:{{ scolor }}">{{ s.score }}</div>
+    <div class="rank-body">
+      {% if s.positives %}<div class="rank-line"><b>利好</b>{{ s.positives }}</div>{% endif %}
+      {% if s.negatives %}<div class="rank-line"><b>利空</b>{{ s.negatives }}</div>{% endif %}
+      {% if s.risks %}<div class="rank-line risk"><b>风险</b>{{ s.risks }}</div>{% endif %}
+    </div>
+    <a class="rank-btn" href="{{ url_for('tasks_new', country=s.country) }}">开始获客 →</a>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty">还没有可用的市场热度排名。</p>
+<p class="hint">
+  市调分两步：① <a href="{{ url_for('research_new') }}">新建市调任务</a>填目标国家；
+  ② Agent 对每个国家做深度研判后，在「录入/更新研判」页逐个录入热度得分（0–100）。
+  录完后这里自动按得分降序排出开发优先级。
+</p>
+{% endif %}
 
 {% if items %}
+<h2>市调任务历史</h2>
 <table>
   <thead><tr><th>市调 ID</th><th>覆盖国家</th><th>执行人</th><th>开始</th><th>状态</th><th>已评/总数</th><th>均分</th><th>缓存</th><th></th></tr></thead>
   <tbody>
@@ -26,7 +63,5 @@
   {% endfor %}
   </tbody>
 </table>
-{% else %}
-<p class="empty">还没有市调任务，<a href="{{ url_for('research_new') }}">新建第一个</a>。</p>
 {% endif %}
 {% endblock %}
