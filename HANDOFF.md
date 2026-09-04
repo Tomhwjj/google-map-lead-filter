@@ -5,6 +5,8 @@
 
 ## 明日待办（最近优先，做完划掉）
 
+> **当前状态（2026-09-04 换窗口快照）**：德国 ENF seller 50 家已全部跑完「背调 → 评分 → UI」，成品报告 `D:/Agent/tmp/enf_de_report.html`（头部 A13/B35/C2，长尾 A13/B36/C1；卖 Deye 4 家：Rongstar / Greenlimon / SolarV / Solarscouts）。中间产物 `enf_de_leads_scored.json`（评分后）在 `D:/Agent/tmp/`，管线脚本 `build_leads_final.py`(tmp，注入规模/product_tier) + `scripts/score_leads.py` + `scripts/render_report.py` + `scripts/serve_report.py`。**下一步只做一件事：客户跟踪池子**（下一条）。
+
 - [x] ~~兜底 8 家~~（WebSearch 9/9 成功、kitesurf 超时降级）：50/50 全判档、0 未确认；纠正 Jäger Fischer 误归类 / Solarscouts 真卖 Deye / BOGA 破产风险
 - [x] ~~修 Solarscouts 误标~~：WebSearch 证明它是电商真卖 Deye（电池/逆变器有价），无需降级——反而暴露「片段不足以定卖 vs 提及」双向教训（已固化 rule）
 - [x] ~~传竞品品牌重跑 backfill~~：三组品牌 + `--deye`（品牌页抓到我方才停）+ `--no-proxy-server`（直连不读系统代理）重跑 50 家成功——4 家卖 Deye 恢复、9 家竞品命中；7 家光伏批发商 brands 空但 body 明确光伏品类 → product_tier 手工判 competitor（增量 24）落地 score_leads.py
