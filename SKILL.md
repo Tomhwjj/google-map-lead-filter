@@ -128,6 +128,17 @@ python scripts/render_report.py leads_final.json --out report.html --title "英�
 python scripts/serve_report.py report.html
 ```
 
+### 第九步：入库 + 复刻报告（本地 Web UI）
+
+评分产物 `leads_final.json` 之后，把结果持久化进 SQLite 企业库（`data/leads.db`），并生成可复刻任务报告。**交互走本地 Web 后台**（`python webapp/app.py`，端口 8766，自动开浏览器）：
+
+1. **新建任务**：填国家/关键词/数据源 → 生成 task_id。
+2. **入库**：选任务 + 粘贴 `leads_final.json` → 三段式比对——全新企业 INSERT（落「潜在客户(未联系)」）/ 完全重复跳过 / 有差异写 `diffs` 待核验队列（**不覆盖旧值**）。
+3. **差异审核**：人工在「差异审核」页逐条 approve（覆盖）/ reject（忽略）。
+4. **复刻报告**：任务详情页「导出复刻报告(.md)」，或 `python scripts/render_task_report.py --task-id <id>`。
+
+**铁律**：客户状态（池子/差异审核）100% 人工在 UI 操作；Agent 只采集/比对/生成报告，不自动判定客户状态。任务/入库/报告也可命令行直调 `scripts/core.py` 纯函数（`start_task` / `ingest_leads` / `build_report`）。
+
 ## 反幻觉铁律
 
 - 不编造公司、邮箱、联系人、代理品牌、规模 —— 只写来源能验证的事实。
@@ -154,3 +165,7 @@ python scripts/serve_report.py report.html
 - `scripts/backfill.py` — 批量背调脚本（抓官网提取邮箱/品牌）
 - `scripts/render_report.py` — 线索 HTML 报告生成器（读 `leads_final.json` → 自包含 HTML）
 - `scripts/serve_report.py` — 本地 HTTP 服务器打开报告（解决 file:// 拦截外链）
+- `scripts/db.py` — SQLite 数据层（5 表 schema + MAIN_ID + 去重键，被 core/webapp 共用）
+- `scripts/core.py` — 业务逻辑纯函数（任务生命周期 / 三段式比对 / 报告数据，CLI 与 UI 共用）
+- `scripts/render_task_report.py` — 复刻报告 md 生成器（架构文档第三节固定结构）
+- `webapp/app.py` — 本地 Web 管理后台（Flask，入库/差异审核/企业库/复刻报告）

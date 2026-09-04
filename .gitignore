@@ -6,3 +6,6 @@ __pycache__/
 *.tmp.json
 leads_*.json
 report.html
+
+# 数据库（企业库，含大量企业数据且频繁变动，不入 git；复刻报告入 git 见 reports/）
+data/

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}仪表盘{% endblock %}
+{% block content %}
+<h1>仪表盘</h1>
+
+<div class="stats">
+  <div class="stat"><b>{{ total_companies }}</b><span>企业总数</span></div>
+  <div class="stat"><b>{{ pending_diffs }}</b><span>待审差异</span></div>
+  <div class="stat"><b>{{ running_tasks }}</b><span>进行中任务</span></div>
+  <div class="stat"><b>{{ tasks | length }}</b><span>任务总数</span></div>
+</div>
+
+<h2>任务列表</h2>
+{% if tasks %}
+<table>
+  <thead><tr><th>任务 ID</th><th>国家</th><th>开始</th><th>状态</th><th>新增</th><th>重复</th><th>差异</th><th></th></tr></thead>
+  <tbody>
+  {% for t in tasks %}
+    <tr>
+      <td><code>{{ t.task_id }}</code></td>
+      <td>{{ t.country or '—' }}</td>
+      <td>{{ t.started_at or '—' }}</td>
+      <td>{{ '进行中' if t.status == 'running' else '已完成' }}</td>
+      <td>{{ t.new_count }}</td>
+      <td>{{ t.dup_count }}</td>
+      <td>{{ t.diff_count }}</td>
+      <td><a href="{{ url_for('task_detail', task_id=t.task_id) }}">详情</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">还没有任务，<a href="{{ url_for('tasks_new') }}">新建一个获客任务</a>。</p>
+{% endif %}
+{% endblock %}

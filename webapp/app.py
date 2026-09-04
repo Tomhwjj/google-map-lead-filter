@@ -1,0 +1,141 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+本地 Web 管理后台（Flask）：获客系统的 UI 交互层。
+
+页面：
+  /                     仪表盘（任务列表 + 企业库概览）
+  /tasks/new            新建获客任务（国家/关键词/数据源 → 生成 task_id）
+  /tasks/<id>           任务详情（复刻报告数据 + 新增企业清单 + 差异清单）
+  /tasks/<id>/report.md 导出复刻报告
+  /ingest               入库（选任务 + 贴评分 JSON → 三段式比对）
+  /diffs                差异审核队列（approve 覆盖 / reject 忽略）
+  /companies            企业库检索（电话/企业名/域名）
+
+启动:
+    python webapp/app.py        # 端口 8766，自动打开浏览器
+"""
+import json
+import os
+import sys
+import threading
+import webbrowser
+
+from flask import Flask, redirect, render_template, request, url_for
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(APP_DIR)
+SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
+sys.path.insert(0, SCRIPTS_DIR)
+
+from core import (build_report, ingest_leads, list_companies, list_diffs,
+                  list_tasks, review_diff, start_task)
+from db import POOLS, get_conn, init_db
+from render_task_report import render_md, render_report
+
+PORT = 8766
+
+app = Flask(__name__,
+            template_folder=os.path.join(APP_DIR, "templates"),
+            static_folder=os.path.join(APP_DIR, "static"))
+
+
+@app.route("/")
+def index():
+    tasks = list_tasks()
+    conn = get_conn()
+    total_companies = conn.execute("SELECT COUNT(*) FROM companies").fetchone()[0]
+    pending_diffs = conn.execute("SELECT COUNT(*) FROM diffs WHERE status='pending'").fetchone()[0]
+    running_tasks = conn.execute("SELECT COUNT(*) FROM tasks WHERE status='running'").fetchone()[0]
+    conn.close()
+    return render_template("index.html", tasks=tasks, total_companies=total_companies,
+                           pending_diffs=pending_diffs, running_tasks=running_tasks)
+
+
+@app.route("/tasks/new", methods=["GET", "POST"])
+def tasks_new():
+    if request.method == "POST":
+        country = (request.form.get("country") or "").strip().upper()
+        keywords_raw = (request.form.get("keywords") or "").strip()
+        sources_raw = (request.form.get("sources") or "").strip()
+        keywords = [k.strip() for k in keywords_raw.splitlines() if k.strip()]
+        sources = [s.strip() for s in sources_raw.replace("，", ",").split(",") if s.strip()]
+        task_id = start_task(country=country, keywords=keywords, sources=sources)
+        return redirect(url_for("task_detail", task_id=task_id))
+    return render_template("tasks_new.html")
+
+
+@app.route("/tasks/<task_id>")
+def task_detail(task_id):
+    try:
+        data = build_report(task_id)
+    except ValueError as e:
+        return render_template("error.html", msg=str(e)), 404
+    task = data["task"]
+    task["keywords_list"] = json.loads(task.get("keywords") or "[]")
+    task["sources_list"] = json.loads(task.get("sources") or "[]")
+    md, _ = render_report(task_id)
+    return render_template("task_detail.html", data=data, md=md, task_id=task_id)
+
+
+@app.route("/tasks/<task_id>/report.md")
+def task_report_md(task_id):
+    md, out = render_report(task_id)
+    return app.response_class(md, mimetype="text/markdown; charset=utf-8",
+                              headers={"Content-Disposition": f"attachment; filename=复刻报告_{task_id}.md"})
+
+
+@app.route("/ingest", methods=["GET", "POST"])
+def ingest():
+    result = None
+    error = None
+    if request.method == "POST":
+        task_id = (request.form.get("task_id") or "").strip()
+        leads_raw = (request.form.get("leads_json") or "").strip()
+        action = request.form.get("action") or "commit"
+        dry_run = (action == "preview")
+        try:
+            leads = json.loads(leads_raw)
+            if not isinstance(leads, list):
+                raise ValueError("JSON 必须是数组（list）")
+            stats = ingest_leads(leads, task_id, dry_run=dry_run)
+            result = {"task_id": task_id, "stats": stats, "dry_run": dry_run}
+        except Exception as e:
+            error = f"入库失败: {e}"
+    tasks = list_tasks()
+    return render_template("ingest.html", tasks=tasks, result=result, error=error)
+
+
+@app.route("/diffs", methods=["GET"])
+def diffs():
+    status = request.args.get("status", "pending")
+    items = list_diffs(status=status)
+    return render_template("diffs.html", items=items, status=status)
+
+
+@app.route("/diffs/<int:diff_id>/<action>", methods=["POST"])
+def diffs_review(diff_id, action):
+    approve = action == "approve"
+    review_diff(diff_id, approve=approve, reviewer="人工(webui)")
+    return redirect(url_for("diffs"))
+
+
+@app.route("/companies", methods=["GET"])
+def companies():
+    q = request.args.get("q", "").strip()
+    pool = request.args.get("pool", "").strip()
+    items = list_companies(query=q, pool=pool or None)
+    return render_template("companies.html", items=items, q=q, pool=pool, pools=POOLS)
+
+
+def main():
+    init_db()
+    url = f"http://127.0.0.1:{PORT}"
+    print(f"获客系统管理后台启动: {url}")
+    print("关闭请按 Ctrl+C")
+    threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    app.run(host="127.0.0.1", port=PORT, debug=False)
+
+
+if __name__ == "__main__":
+    main()

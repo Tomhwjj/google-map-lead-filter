@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}企业库{% endblock %}
+{% block content %}
+<h1>企业库</h1>
+
+<form method="get" class="form row-form">
+  <input type="text" name="q" value="{{ q }}" placeholder="企业名 / 电话 / 域名 / 邮箱">
+  <select name="pool">
+    <option value="">全部客户池</option>
+    {% for p in pools %}<option value="{{ p }}" {{ 'selected' if pool == p }}>{{ p }}</option>{% endfor %}
+  </select>
+  <button type="submit">搜索</button>
+</form>
+
+{% if items %}
+<p class="hint">共 {{ items | length }} 条</p>
+<table>
+  <thead><tr><th>企业</th><th>国家/城市</th><th>渠道</th><th>电话</th><th>邮箱</th><th>官网</th><th>头部</th><th>长尾</th><th>Deye</th><th>客户池</th></tr></thead>
+  <tbody>
+  {% for c in items %}
+    <tr>
+      <td>{{ c.company_name }}</td>
+      <td>{{ c.country or '' }}/{{ c.city or '' }}</td>
+      <td>{{ c.customer_type or '' }}</td>
+      <td>{{ c.phone or '' }}</td>
+      <td>{{ c.email or '' }}</td>
+      <td>{% if c.website %}<a href="{{ c.website }}" target="_blank">官网</a>{% endif %}</td>
+      <td>{{ c.grade or '' }}</td>
+      <td>{{ c.grade_lt or '' }}</td>
+      <td>{{ '✓' if c.sells_deye else '' }}</td>
+      <td>{{ c.pool or '' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="empty">无匹配企业。</p>{% endif %}
+{% endblock %}

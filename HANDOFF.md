@@ -5,16 +5,17 @@
 
 ## 明日待办（最近优先，做完划掉）
 
-> **当前状态（2026-09-04 换窗口快照）**：德国 ENF seller 50 家已全部跑完「背调 → 评分 → UI」，成品报告 `D:/Agent/tmp/enf_de_report.html`（头部 A13/B35/C2，长尾 A13/B36/C1；卖 Deye 4 家：Rongstar / Greenlimon / SolarV / Solarscouts）。中间产物 `enf_de_leads_scored.json`（评分后）在 `D:/Agent/tmp/`，管线脚本 `build_leads_final.py`(tmp，注入规模/product_tier) + `scripts/score_leads.py` + `scripts/render_report.py` + `scripts/serve_report.py`。**下一步只做一件事：客户跟踪池子**（下一条）。
+> **当前状态（2026-09-04 封装第一阶段完成）**：数据层 + 获客模块改造落地——SQLite 企业库（`data/leads.db`，5 表）+ MAIN_ID + 任务时间戳体系 + 三段式比对 + 复刻报告，交互封装成 Flask Web UI（`webapp/app.py`，8766）。核心逻辑已用 50 家德国线索验证（50 新增 → 幂等全重复 → 改字段进差异队列）。**下一步：客户池模块**（五分类 UI + 状态轨迹，复用 `pool` 字段 + `pool_log` 表，下一条）。
 
 - [x] ~~兜底 8 家~~（WebSearch 9/9 成功、kitesurf 超时降级）：50/50 全判档、0 未确认；纠正 Jäger Fischer 误归类 / Solarscouts 真卖 Deye / BOGA 破产风险
 - [x] ~~修 Solarscouts 误标~~：WebSearch 证明它是电商真卖 Deye（电池/逆变器有价），无需降级——反而暴露「片段不足以定卖 vs 提及」双向教训（已固化 rule）
 - [x] ~~传竞品品牌重跑 backfill~~：三组品牌 + `--deye`（品牌页抓到我方才停）+ `--no-proxy-server`（直连不读系统代理）重跑 50 家成功——4 家卖 Deye 恢复、9 家竞品命中；7 家光伏批发商 brands 空但 body 明确光伏品类 → product_tier 手工判 competitor（增量 24）落地 score_leads.py
-- [ ] **客户跟踪池子**（获客途径完善）：按钮分池——潜在客户（未联系 → 已联系）、强意向、老客户；本地保存 + 检索（电话 / 企业名）。存储方案待定：SQLite（`fetch_enf.py` 已用 SQLite WAL，可复用）vs markdown vs csv
+- [ ] **客户池模块**（第二阶段）：五分类（潜在未联系/已联系/强意向/重点关注/老客户）操作 UI + `pool_log` 轨迹时间戳；复用本轮 `companies.pool` 字段 + `pool_log` 表。Web 后台加「客户池」页面
 
 ## 改动记录（按日倒序）
 
 - **2026-09-04**
+  - **封装第一阶段（数据层 + Web UI）落地**：按架构文档建 SQLite 企业库 + MAIN_ID + 任务时间戳 + 三段式比对 + 复刻报告，交互封装成 Flask Web UI（8766）。新增 `scripts/db.py`（5表）/ `scripts/core.py`（纯函数 start_task/ingest_leads/build_report）/ `scripts/render_task_report.py` / `webapp/`（页面：仪表盘/新建任务/入库/差异审核/企业库）。50 家德国线索验证通过（50新增→幂等全重复→改1条phone进差异）。修正「fetch_enf 已用 SQLite」过时说法（实测全 scripts 零 SQL）
   - 传竞品品牌重跑 backfill 完成（三组品牌 + `--deye` + `--no-proxy-server` 直连）：50 家全成功，4 家卖 Deye（Rongstar/Greenlimon/SolarV/Solarscouts）、9 家竞品命中；7 家光伏批发商 brands 空但 body 明确光伏品类（德国品牌墙 JS 动态/图片，backfill 抓不到品牌名）→ product_tier 手工判 competitor（增量 24）落地 score_leads.py；K.H.Moelle 纯电气淘汰；最终 UI 头部 A13/B35/C2，卖 Deye 4 家
   - 修 backfill 三个缺陷：`--deye`（品牌页抓到我方品牌才停，否则命中竞品就停、漏 Deye）、`--no-proxy-server`（直连不读系统代理，否则梯子关掉 ERR_PROXY_CONNECTION_FAILED 38/50）、德语品牌页路径（marken/hersteller/produkte）
   - 完整版 backfill 跑 50 家 DE seller：规模判档 42/50（84%）、8 家未确认需兜底；Deye 命中 2→4 家（Rongstar / Greenlimon / SolarV / Solarscouts）；生成 UI 报告（头部长尾均 A4 / B46）
@@ -46,9 +47,10 @@
   SRC=/d/Agent/git/google-map-lead-filter
   for DST in ~/.agents/skills/google-map-lead-filter ~/.claude/skills/google-map-lead-filter; do
     rm -rf "$DST"; mkdir -p "$DST"
-    cp -r "$SRC/SKILL.md" "$SRC/references" "$SRC/scripts" "$SRC/templates" "$SRC/HANDOFF.md" "$DST/"
+    cp -r "$SRC/SKILL.md" "$SRC/references" "$SRC/scripts" "$SRC/templates" "$SRC/webapp" "$SRC/HANDOFF.md" "$DST/"
   done
   ```
 - 数据文件（`D:/Agent/tmp/*.json`）是会话产物，不入 git。
+- **SQLite 库 `data/leads.db` 不入 git**（企业数据 + 频繁变动）；**复刻报告 `reports/` 入 git**（永久存档，作下次 AI 迭代上下文）。
 - 口径唯一来源 `references/qualification-rules.md`，SKILL.md 不重复数字。
 - **技术债**：`render_report.py` 的 `wa_link()` 硬编码法国 +33，扩展德国(+49)/荷兰(+31)/西班牙(+34)前要按 `country` 映射。

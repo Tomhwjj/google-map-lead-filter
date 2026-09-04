@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}获客系统{% endblock %} · 光伏海外获客</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">🔌 光伏获客系统</span>
+    <a href="{{ url_for('index') }}" class="{{ 'active' if request.endpoint == 'index' }}">仪表盘</a>
+    <a href="{{ url_for('tasks_new') }}" class="{{ 'active' if request.endpoint == 'tasks_new' }}">新建任务</a>
+    <a href="{{ url_for('ingest') }}" class="{{ 'active' if request.endpoint == 'ingest' }}">入库</a>
+    <a href="{{ url_for('diffs') }}" class="{{ 'active' if request.endpoint == 'diffs' }}">差异审核</a>
+    <a href="{{ url_for('companies') }}" class="{{ 'active' if request.endpoint == 'companies' }}">企业库</a>
+  </nav>
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

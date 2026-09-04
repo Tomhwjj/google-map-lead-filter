@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}任务详情{% endblock %}
+{% block content %}
+{% set t = data.task %}
+<h1>任务详情</h1>
+
+<div class="stats">
+  <div class="stat"><b>{{ data.stats.new }}</b><span>新增</span></div>
+  <div class="stat"><b>{{ data.stats.dup }}</b><span>重复</span></div>
+  <div class="stat"><b>{{ data.stats.diff }}</b><span>差异</span></div>
+  <div class="stat"><b>{{ data.stats.new + data.stats.dup + data.stats.diff }}</b><span>筛查总数</span></div>
+</div>
+
+<table>
+  <tr><th>任务 ID</th><td><code>{{ t.task_id }}</code></td></tr>
+  <tr><th>目标国家</th><td>{{ t.country or '—' }}</td></tr>
+  <tr><th>开始时间</th><td>{{ t.started_at or '—' }}</td></tr>
+  <tr><th>结束时间</th><td>{{ t.finished_at or '（进行中）' }}</td></tr>
+  <tr><th>运行时长</th><td>{{ t.duration_sec ~ ' 秒' if t.duration_sec is not none else '（进行中）' }}</td></tr>
+  <tr><th>关键词</th><td>{{ t.keywords_list | join('；') if t.keywords_list else '—' }}</td></tr>
+  <tr><th>数据源</th><td>{{ t.sources_list | join('、') if t.sources_list else '—' }}</td></tr>
+</table>
+
+<p><a class="btn" href="{{ url_for('task_report_md', task_id=task_id) }}">导出复刻报告（.md）</a></p>
+
+<h2>新增企业（{{ data.new_companies | length }}）</h2>
+{% if data.new_companies %}
+<table>
+  <thead><tr><th>企业</th><th>国家/城市</th><th>渠道</th><th>电话</th><th>邮箱</th><th>官网</th><th>头部</th><th>长尾</th><th>Deye</th></tr></thead>
+  <tbody>
+  {% for c in data.new_companies %}
+    <tr>
+      <td>{{ c.company_name }}</td>
+      <td>{{ c.country }}/{{ c.city }}</td>
+      <td>{{ c.customer_type or '' }}</td>
+      <td>{{ c.phone or '' }}</td>
+      <td>{{ c.email or '' }}</td>
+      <td>{% if c.website %}<a href="{{ c.website }}" target="_blank">{{ c.website }}</a>{% endif %}</td>
+      <td>{{ c.grade or '' }}</td>
+      <td>{{ c.grade_lt or '' }}</td>
+      <td>{{ '✓' if c.sells_deye else '' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="empty">本次无新增。</p>{% endif %}
+
+<h2>差异待核验（{{ data.diffs | length }}）</h2>
+{% if data.diffs %}
+<table>
+  <thead><tr><th>企业</th><th>字段</th><th>旧值</th><th>新值</th><th>状态</th></tr></thead>
+  <tbody>
+  {% for d in data.diffs %}
+    <tr>
+      <td>{{ d.company_name or d.main_id }}</td>
+      <td>{{ d.field }}</td>
+      <td>{{ d.old_value or '' }}</td>
+      <td>{{ d.new_value or '' }}</td>
+      <td>{{ d.status }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="empty">本次无差异。</p>{% endif %}
+{% endblock %}
