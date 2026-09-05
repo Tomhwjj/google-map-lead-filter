@@ -144,7 +144,7 @@ def pool():
     countries = list_countries()
     has_filter = bool(pool_filter or country or q or sells_deye is not None)
     items = list_companies(query=q, pool=pool_filter, country=country,
-                           sells_deye=sells_deye, limit=300) if has_filter else []
+                           sells_deye=sells_deye) if has_filter else []
     logs = list_pool_log(limit=50) if not has_filter else []
     return render_template("pool.html", stats=stats, pool=pool_filter, pools=POOLS,
                            items=items, logs=logs, country=country, countries=countries,

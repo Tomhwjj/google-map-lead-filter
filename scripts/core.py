@@ -264,7 +264,7 @@ CARD_COLS = ["main_id", "company_name", "country", "city", "customer_type", "pho
              "reason", "pool", "domain"]
 
 
-def list_companies(query="", pool=None, country=None, sells_deye=None, limit=200,
+def list_companies(query="", pool=None, country=None, sells_deye=None, limit=None,
                    db_path=None):
     """企业库检索（电话/企业名/域名模糊匹配 + 国家/客户池/是否卖 Deye 筛选），返回卡片渲染所需完整字段。
 
@@ -287,8 +287,10 @@ def list_companies(query="", pool=None, country=None, sells_deye=None, limit=200
         params += [q, q, q, q]
     if conds:
         sql += " WHERE " + " AND ".join(conds)
-    sql += " ORDER BY score DESC LIMIT ?"
-    params.append(limit)
+    sql += " ORDER BY score DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
     rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
     conn.close()
     for r in rows:
