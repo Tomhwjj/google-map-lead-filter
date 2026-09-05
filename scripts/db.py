@@ -37,7 +37,7 @@ DEFAULT_DB = os.path.join(PROJECT_ROOT, "data", "leads.db")
 
 # 客户池五分类（架构文档固定，默认落「潜在客户(未联系)」）
 DEFAULT_POOL = "潜在客户(未联系)"
-POOLS = ["潜在客户(未联系)", "潜在客户(已取得联系)", "强意向客户", "重点关注客户", "老客户"]
+POOLS = ["潜在客户(未联系)", "潜在客户(已取得联系)", "重点关注客户", "黑名单客户", "老客户"]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS companies (
