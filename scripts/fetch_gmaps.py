@@ -29,8 +29,19 @@ CSV_FIELDS = ["company_name", "rating", "phone", "website",
 
 
 def extract_real_url(href):
-    """Google Maps 的 Website 链接是重定向 URL，解析出真实网址。"""
+    """Google Maps 的 Website 链接是重定向 URL，解析出真实网址。
+
+    三种跳转形态：
+      1. 广告跳转 /aclk?...         真实网址藏在 adurl 参数；无 adurl 即纯广告脏数据，返回 ""（丢弃）
+      2. 普通外链 /url?q=... 或 url?q= 真实网址在 q 参数
+      3. 其他直链                 原样返回
+    """
     if not href:
+        return ""
+    if "/aclk?" in href or "aclk?" in href:
+        qs = parse_qs(urlparse(href).query)
+        if "adurl" in qs:
+            return unquote(qs["adurl"][0])
         return ""
     if "url?q=" in href or "/url?" in href:
         qs = parse_qs(urlparse(href).query)

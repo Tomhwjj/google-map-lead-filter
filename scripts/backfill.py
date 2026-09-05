@@ -88,7 +88,11 @@ def main():
                 break
             name = lead.get("company_name", "").strip()
             website = (lead.get("website") or "").strip()
-            rec = {
+            # 继承原始字段（city/phone/rating/country/email/customer_type/address/
+            # profile_url/source_url/google_maps_url/raw_text），绝不丢字段
+            # （2026-09-05 教训：rec 只输出自己抓的字段，丢 source 字段导致入库 country 全空）
+            rec = dict(lead)
+            rec.update({
                 "company_name": name,
                 "website": website,
                 "title": "",
@@ -98,7 +102,7 @@ def main():
                 "brands_context": {},
                 "body": "",
                 "error": "",
-            }
+            })
             if website.startswith("http"):
                 texts = []
                 try:

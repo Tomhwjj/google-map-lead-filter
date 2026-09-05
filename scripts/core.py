@@ -341,6 +341,80 @@ def list_diffs(status="pending", limit=200, db_path=None):
     return rows
 
 
+def list_diff_groups(status="pending", limit=200, db_path=None):
+    """差异按企业聚合：每家企业一行（含待核验字段数），替代散乱的单字段列表。
+
+    审核入口先看「哪些企业有差异」，再点进企业详情看字段级明细。返回：
+    [{main_id, company_name, country, company_website, diff_count, latest_detected_at}]
+    """
+    conn = init_db(db_path)
+    sql = """
+        SELECT d.main_id, c.company_name, c.country, c.website AS company_website,
+               COUNT(*) AS diff_count, MAX(d.detected_at) AS latest_detected_at
+        FROM diffs d LEFT JOIN companies c ON d.main_id=c.main_id
+        WHERE d.status=?
+        GROUP BY d.main_id
+        ORDER BY latest_detected_at DESC LIMIT ?
+    """
+    rows = [dict(r) for r in conn.execute(sql, (status, limit)).fetchall()]
+    conn.close()
+    return rows
+
+
+def list_company_diffs(main_id, status=None, db_path=None):
+    """取某企业的差异明细（字段级 old→new），status 不传则全部，按检测时间倒序。"""
+    conn = init_db(db_path)
+    sql = "SELECT * FROM diffs WHERE main_id=?"
+    params = [main_id]
+    if status:
+        sql += " AND status=?"
+        params.append(status)
+    sql += " ORDER BY detected_at DESC, id DESC"
+    rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    conn.close()
+    return rows
+
+
+def record_issue(task_id, category, title, detail="", solution="", status="open",
+                 db_path=None):
+    """记录一次获客遇到的问题（结构化落库，供后续迭代复盘）。
+
+    架构文档第三节《复刻报告》第六节「背调问题清单」的数据来源。
+    category: 采集/字段/编码/网络/数据质量/机制 等；status: open/resolved/deferred。
+    返回新 issue id。
+    """
+    conn = init_db(db_path)
+    now = now_iso()
+    cur = conn.execute(
+        "INSERT INTO task_issues (task_id, category, title, detail, solution, "
+        "status, created_at, resolved_at) VALUES (?,?,?,?,?,?,?,?)",
+        (task_id, category, title, detail, solution, status, now,
+         now if status == "resolved" else None))
+    conn.commit()
+    issue_id = cur.lastrowid
+    conn.close()
+    return issue_id
+
+
+def list_task_issues(task_id=None, status=None, db_path=None):
+    """列出获客问题清单（可按 task_id / status 过滤，倒序）。"""
+    conn = init_db(db_path)
+    sql = "SELECT * FROM task_issues"
+    conds, params = [], []
+    if task_id:
+        conds.append("task_id=?")
+        params.append(task_id)
+    if status:
+        conds.append("status=?")
+        params.append(status)
+    if conds:
+        sql += " WHERE " + " AND ".join(conds)
+    sql += " ORDER BY id DESC"
+    rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    conn.close()
+    return rows
+
+
 def review_diff(diff_id, approve, reviewer="人工", db_path=None):
     """审核一条差异：approve=True 覆盖旧值，False 忽略。"""
     conn = init_db(db_path)
@@ -387,6 +461,8 @@ def build_report(task_id, db_path=None):
         "c.website, c.grade, c.grade_lt, c.sells_deye, c.pool FROM companies c "
         "JOIN task_companies tc ON c.main_id=tc.main_id "
         "WHERE tc.task_id=? AND tc.action='new' ORDER BY c.score DESC", (task_id,)).fetchall()]
+    issues = [dict(r) for r in conn.execute(
+        "SELECT * FROM task_issues WHERE task_id=? ORDER BY id", (task_id,)).fetchall()]
 
     conn.close()
     return {
@@ -394,6 +470,7 @@ def build_report(task_id, db_path=None):
         "stats": stats,
         "diffs": diffs,
         "new_companies": new_companies,
+        "issues": issues,
     }
 
 
@@ -455,7 +532,7 @@ def pool_stats(db_path=None):
 
 
 def get_company(main_id, db_path=None):
-    """取单个企业详情 + 其客户池轨迹。"""
+    """取单个企业详情 + 其客户池轨迹 + 差异明细（字段级 old→new）。"""
     conn = init_db(db_path)
     c = conn.execute("SELECT * FROM companies WHERE main_id=?", (main_id,)).fetchone()
     if not c:
@@ -464,8 +541,9 @@ def get_company(main_id, db_path=None):
     logs = [dict(r) for r in conn.execute(
         "SELECT * FROM pool_log WHERE main_id=? ORDER BY changed_at DESC, id DESC",
         (main_id,)).fetchall()]
+    diffs = list_company_diffs(main_id, db_path=db_path)
     conn.close()
-    return {"company": dict(c), "pool_log": logs}
+    return {"company": dict(c), "pool_log": logs, "diffs": diffs}
 
 
 # ---------------------------------------------------------------------------

@@ -19,8 +19,12 @@ import os
 import sys
 from urllib.parse import urlparse
 
-OUT_FIELDS = ["company_name", "city", "rating", "phone",
-              "website", "google_maps_url", "raw_text"]
+# 字段并集：兼容三种来源（enf 有 country/email/customer_type/address/profile_url；
+# gmaps 有 rating/google_maps_url/raw_text；search 有 snippet/source_url），
+# 每种来源缺的字段留空，绝不丢字段（2026-09-05 教训：字段丢失导致入库 country 全空）
+OUT_FIELDS = ["company_name", "country", "city", "customer_type",
+              "phone", "email", "website", "address", "profile_url",
+              "source_url", "rating", "google_maps_url", "raw_text"]
 
 
 def domain_of(url):

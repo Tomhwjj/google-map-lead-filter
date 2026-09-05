@@ -110,7 +110,22 @@ def render_md(data):
     lines.append("")
 
     lines.append("## 六、背调问题清单\n")
-    lines.append("> 待补充：本次背调发现的问题（信息残缺 / 官网失效 / 联系方式失效 / 业务转型 / 疑似空壳）。\n")
+    issues = data.get("issues") or []
+    if issues:
+        lines.append("| 分类 | 问题 | 状态 | 解决方案 |")
+        lines.append("|---|---|---|---|")
+        for it in issues:
+            cat = it.get("category") or ""
+            title = it.get("title") or ""
+            st = it.get("status") or ""
+            sol = it.get("solution") or ""
+            lines.append(f"| {cat} | {title} | {st} | {sol} |")
+        for it in issues:
+            if it.get("detail"):
+                lines.append(f"\n- **{it.get('title') or ''}**：{it.get('detail')}")
+    else:
+        lines.append("（本次无记录问题）")
+    lines.append("")
 
     lines.append("## 七、本次获客结论\n")
     lines.append("> 待补充。\n")

@@ -3,7 +3,7 @@
 """
 数据层：SQLite 企业库（本地私有化获客系统的持久化底座）。
 
-7 张表：
+8 张表：
   companies      — 企业主表（main_id 主键，全字段 + 客户池 pool + 时间戳轨迹）
   tasks          — 获客任务表（task_id 主键，起止时间戳 / 时长 / 关键词快照 / 数据源清单）
   task_companies — 任务 ↔ 企业关联（task_id + main_id，action: new/dup/diff）
@@ -11,6 +11,7 @@
   pool_log       — 客户池状态轨迹（main_id + from/to + 时间戳 + 操作人 + 备注）
   market_tasks   — 市调任务表（mr_id 主键，覆盖国家 / 执行人 / 时间戳 / 缓存 7 天过期）
   country_scores — 各国热度得分（mr_id + country，0-100 分 + 利好利空 / 风险 / 来源快照）
+  task_issues    — 获客问题记录（task_id 关联任务，分类/标题/详情/方案，供迭代复盘）
 
 被 core.py / webapp 共用；也可直接跑初始化：
     python db.py                 # 用默认库路径初始化
@@ -160,6 +161,20 @@ CREATE TABLE IF NOT EXISTS country_scores (
 
 CREATE INDEX IF NOT EXISTS idx_country_scores_mr ON country_scores(mr_id);
 CREATE INDEX IF NOT EXISTS idx_market_tasks_status ON market_tasks(status);
+
+CREATE TABLE IF NOT EXISTS task_issues (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id     TEXT,
+    category    TEXT,
+    title       TEXT,
+    detail      TEXT,
+    solution    TEXT,
+    status      TEXT DEFAULT 'open',
+    created_at  TEXT,
+    resolved_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_issues_task ON task_issues(task_id);
 """
 
 

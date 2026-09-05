@@ -43,7 +43,9 @@
     </div>
     <div class="rank-actions">
       <a class="rank-btn" href="{{ url_for('research_country', mr_id=ranking.task.mr_id, country=s.country) }}">详细研判依据 →</a>
-      <a class="rank-btn primary" href="{{ url_for('tasks_new', country=s.country) }}">开始获客 →</a>
+      <form method="post" action="{{ url_for('tasks_start', country=s.country) }}" class="inline">
+        <button class="rank-btn primary">开始获客 →</button>
+      </form>
     </div>
   </div>
   {% endfor %}

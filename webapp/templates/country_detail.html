@@ -17,7 +17,10 @@
 </div>
 
 <div class="row">
-  <a class="btn primary" href="{{ url_for('tasks_new', country=detail.country) }}">🚀 开始获客（{{ detail.country }}）</a>
+  <form method="post" action="{{ url_for('tasks_start', country=detail.country) }}" class="inline">
+    <button class="primary">🚀 开始获客（{{ detail.country }}）</button>
+  </form>
+  <p class="hint" style="margin:0;">点击后创建该国的获客任务单（记录用）；线索采集/评分/入库走命令行脚本。</p>
 </div>
 
 <h2>判断依据（7 维度）</h2>

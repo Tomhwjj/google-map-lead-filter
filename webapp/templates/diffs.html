@@ -4,6 +4,7 @@
 <h1>差异审核队列</h1>
 
 <p class="hint">
+  按企业聚合，点企业名进入详情看字段级「旧值 → 新值」对比并逐条审核。
   筛选：
   <a href="{{ url_for('diffs', status='pending') }}" class="{{ 'active' if status == 'pending' }}">待审核</a> ·
   <a href="{{ url_for('diffs', status='approved') }}" class="{{ 'active' if status == 'approved' }}">已覆盖</a> ·
@@ -12,26 +13,15 @@
 
 {% if items %}
 <table>
-  <thead><tr><th>企业</th><th>字段</th><th>旧值</th><th>新值</th><th>状态</th><th>检测时间</th><th>操作</th></tr></thead>
+  <thead><tr><th>企业</th><th>国家</th><th>差异字段数</th><th>最近检测</th><th>操作</th></tr></thead>
   <tbody>
   {% for d in items %}
     <tr>
-      <td>{{ d.company_name or d.main_id }}</td>
-      <td><code>{{ d.field }}</code></td>
-      <td>{{ d.old_value or '（空）' }}</td>
-      <td>{{ d.new_value or '（空）' }}</td>
-      <td>{{ d.status }}</td>
-      <td>{{ d.detected_at or '' }}</td>
-      <td class="actions">
-        {% if d.status == 'pending' %}
-        <form method="post" action="{{ url_for('diffs_review', diff_id=d.id, action='approve') }}" class="inline">
-          <button class="ok">覆盖（用新值）</button>
-        </form>
-        <form method="post" action="{{ url_for('diffs_review', diff_id=d.id, action='reject') }}" class="inline">
-          <button class="muted">忽略（保留旧值）</button>
-        </form>
-        {% else %}—{% endif %}
-      </td>
+      <td><a href="{{ url_for('company_detail', main_id=d.main_id) }}">{{ d.company_name or d.main_id }}</a></td>
+      <td>{{ d.country or '—' }}</td>
+      <td><b>{{ d.diff_count }}</b></td>
+      <td>{{ d.latest_detected_at or '' }}</td>
+      <td><a class="btn" href="{{ url_for('company_detail', main_id=d.main_id) }}#diffs">去审核</a></td>
     </tr>
   {% endfor %}
   </tbody>

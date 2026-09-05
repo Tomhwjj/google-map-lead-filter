@@ -5,7 +5,7 @@
 
 页面：
   /                     仪表盘（任务列表 + 企业库概览）
-  /tasks/new            新建获客任务（国家/关键词/数据源 → 生成 task_id，获客自动入库）
+  /tasks/start/<country>  一键开始获客（POST，从市调排名触发 → 后台 Claude 自动跑流水线）
   /tasks/<id>           任务详情（复刻报告数据 + 新增企业清单 + 差异清单）
   /tasks/<id>/report.md 导出复刻报告
   /diffs                差异审核队列（approve 覆盖 / reject 忽略）
@@ -36,7 +36,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 from core import (RESEARCH_DIMS, build_report, change_pool, finish_research,
                   get_company, get_country_detail, get_research,
                   latest_research_ranking, list_companies, list_countries,
-                  list_diffs, list_pool_log, list_research, list_tasks,
+                  list_diff_groups, list_pool_log, list_research, list_tasks,
                   pool_stats, review_diff, save_country_score, start_research,
                   start_task)
 from db import POOLS, get_conn, init_db
@@ -75,19 +75,12 @@ def index():
                            pool_stats=stats, pools=POOLS)
 
 
-@app.route("/tasks/new", methods=["GET", "POST"])
-def tasks_new():
-    if request.method == "POST":
-        country = (request.form.get("country") or "").strip().upper()
-        keywords_raw = (request.form.get("keywords") or "").strip()
-        sources_raw = (request.form.get("sources") or "").strip()
-        keywords = [k.strip() for k in keywords_raw.splitlines() if k.strip()]
-        sources = [s.strip() for s in sources_raw.replace("，", ",").split(",") if s.strip()]
-        task_id = start_task(country=country, keywords=keywords, sources=sources)
-        return redirect(url_for("task_detail", task_id=task_id))
-    # GET 时支持市调排名「开始获客」预填国家
-    preset_country = (request.args.get("country") or "").strip().upper()
-    return render_template("tasks_new.html", preset_country=preset_country)
+@app.route("/tasks/start/<country>", methods=["POST"])
+def tasks_start(country):
+    """创建获客任务单（记录用），线索采集/评分/入库走命令行脚本或人工。"""
+    country = (country or "").strip().upper()
+    task_id = start_task(country=country, keywords=[], sources=["市调排名触发"])
+    return redirect(url_for("task_detail", task_id=task_id))
 
 
 @app.route("/tasks/<task_id>")
@@ -113,7 +106,7 @@ def task_report_md(task_id):
 @app.route("/diffs", methods=["GET"])
 def diffs():
     status = request.args.get("status", "pending")
-    items = list_diffs(status=status)
+    items = list_diff_groups(status=status)
     return render_template("diffs.html", items=items, status=status)
 
 
@@ -121,7 +114,8 @@ def diffs():
 def diffs_review(diff_id, action):
     approve = action == "approve"
     review_diff(diff_id, approve=approve, reviewer="人工(webui)")
-    return redirect(url_for("diffs"))
+    next_url = request.form.get("next") or url_for("diffs")
+    return redirect(next_url)
 
 
 @app.route("/companies", methods=["GET"])
@@ -173,7 +167,7 @@ def company_detail(main_id):
             except Exception:
                 pass
     return render_template("company_detail.html", company=company,
-                           logs=data["pool_log"], pools=POOLS)
+                           logs=data["pool_log"], diffs=data["diffs"], pools=POOLS)
 
 
 @app.route("/companies/<main_id>/pool", methods=["POST"])
@@ -198,8 +192,8 @@ def research():
 
 @app.route("/research/start", methods=["POST"])
 def research_start():
-    """一键开始市调：默认欧盟 27 国 + 乌克兰总调查（无需选国家）。"""
-    executor = (request.form.get("executor") or "智能体").strip()
+    """创建市调任务单（28 国），热度研判数据在详情页手动录入。"""
+    executor = (request.form.get("executor") or "人工").strip()
     mr_id = start_research(countries=None, executor=executor)
     return redirect(url_for("research_detail", mr_id=mr_id))
 

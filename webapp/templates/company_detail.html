@@ -25,6 +25,35 @@
   </form>
 </div>
 
+<h2 id="diffs">差异待核验（{{ diffs | length }}）</h2>
+{% if diffs %}
+<table>
+  <thead><tr><th style="width:110px;">字段</th><th>旧值（当前库内）</th><th>新值（本次采集）</th><th style="width:120px;">状态</th><th style="width:180px;">操作</th></tr></thead>
+  <tbody>
+  {% for d in diffs %}
+    <tr class="{{ 'pending' if d.status == 'pending' else '' }}">
+      <td><code>{{ d.field }}</code></td>
+      <td>{% if d.old_value %}{{ d.old_value }}{% else %}<span class="empty">（空）</span>{% endif %}</td>
+      <td>{% if d.new_value %}{{ d.new_value }}{% else %}<span class="empty">（空）</span>{% endif %}</td>
+      <td>{{ d.status }}</td>
+      <td class="actions">
+        {% if d.status == 'pending' %}
+        <form method="post" action="{{ url_for('diffs_review', diff_id=d.id, action='approve') }}" class="inline">
+          <button class="ok" title="用新值覆盖库内旧值">覆盖（新值）</button>
+          <input type="hidden" name="next" value="{{ url_for('company_detail', main_id=company.main_id) }}#diffs">
+        </form>
+        <form method="post" action="{{ url_for('diffs_review', diff_id=d.id, action='reject') }}" class="inline">
+          <button class="muted" title="保留库内旧值，忽略本次">忽略（旧值）</button>
+          <input type="hidden" name="next" value="{{ url_for('company_detail', main_id=company.main_id) }}#diffs">
+        </form>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="empty">该企业暂无差异记录。</p>{% endif %}
+
 <h2>客户池轨迹</h2>
 {% if logs %}
 <table>

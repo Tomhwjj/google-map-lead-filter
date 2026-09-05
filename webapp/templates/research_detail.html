@@ -11,6 +11,10 @@
 
 {% if task.expired %}<p class="error">⚠️ 缓存已过期（{{ task.cache_expires_at }}），建议重搜更新热度。</p>{% endif %}
 
+{% if task.status == 'running' %}
+<p class="hint" style="background:#eff6ff;border-color:#bfdbfe;">📝 市调任务已创建（{{ task.countries_list | length }} 国待研判）。用下方「录入 / 更新国家研判」表单逐国录入热度分，录完点「结束任务」。</p>
+{% endif %}
+
 <div class="stats">
   <div class="stat"><b>{{ scores | length }}</b><span>已评国家</span></div>
   <div class="stat"><b>{{ task.countries_list | length }}</b><span>覆盖国家</span></div>
@@ -40,7 +44,9 @@
       <td>{{ s.positives or '—' }}</td>
       <td>{{ s.negatives or '—' }}</td>
       <td><a href="{{ url_for('research_country', mr_id=task.mr_id, country=s.country) }}">详情</a></td>
-      <td><a class="btn" href="{{ url_for('tasks_new', country=s.country) }}">开始获客</a></td>
+      <td><form method="post" action="{{ url_for('tasks_start', country=s.country) }}" class="inline">
+        <button class="btn">开始获客</button>
+      </form></td>
     </tr>
   {% endfor %}
   </tbody>

@@ -4,6 +4,10 @@
 {% set t = data.task %}
 <h1>任务详情</h1>
 
+{% if t.status == 'running' %}
+<p class="hint" style="background:#eff6ff;border-color:#bfdbfe;">📝 获客任务单已创建。线索采集/评分/入库走命令行脚本（search_leads → fetch_enf → merge → backfill → score → ingest_leads），完成后本页显示结果。</p>
+{% endif %}
+
 <div class="stats">
   <div class="stat"><b>{{ data.stats.new }}</b><span>新增</span></div>
   <div class="stat"><b>{{ data.stats.dup }}</b><span>重复</span></div>
