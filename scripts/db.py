@@ -152,6 +152,7 @@ CREATE TABLE IF NOT EXISTS country_scores (
     negatives  TEXT,
     risks      TEXT,
     sources    TEXT,
+    dimensions TEXT,
     created_at TEXT,
     updated_at TEXT,
     UNIQUE(mr_id, country)
@@ -175,6 +176,10 @@ def init_db(db_path=None):
     """建表（幂等），返回连接。"""
     conn = get_conn(db_path)
     conn.executescript(SCHEMA)
+    # 老库迁移：country_scores 补 dimensions 列（7 维度判断依据）
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(country_scores)")]
+    if "dimensions" not in cols:
+        conn.execute("ALTER TABLE country_scores ADD COLUMN dimensions TEXT")
     conn.commit()
     return conn
 

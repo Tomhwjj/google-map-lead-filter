@@ -14,11 +14,17 @@
     <option value="">全部客户池</option>
     {% for p in pools %}<option value="{{ p }}" {{ 'selected' if pool == p }}>{{ p }}</option>{% endfor %}
   </select>
+  <select name="deye">
+    <option value="">是否卖 Deye：全部</option>
+    <option value="yes" {{ 'selected' if deye == 'yes' }}>卖 Deye</option>
+    <option value="no" {{ 'selected' if deye == 'no' }}>不卖 Deye</option>
+  </select>
   <button type="submit">搜索</button>
+  {% if q or pool or country or deye %}<a href="{{ url_for('companies') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);">清空</a>{% endif %}
 </form>
 
 {% if items %}
 <p class="hint">共 {{ items | length }} 条 · 头部/长尾双模式可切换，分数按当前模式重算</p>
-{{ cards_block(items, pools, url_for('companies', q=q, pool=pool, country=country)) }}
+{{ cards_block(items, pools, url_for('companies', q=q, pool=pool, country=country, deye=deye)) }}
 {% else %}<p class="empty">无匹配企业。</p>{% endif %}
 {% endblock %}

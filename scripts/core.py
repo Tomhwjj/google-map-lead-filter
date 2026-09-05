@@ -233,6 +233,15 @@ COUNTRY_NAMES = {
     "LV": "拉脱维亚", "LT": "立陶宛", "UA": "乌克兰",
 }
 
+# 市调默认覆盖范围：欧盟 27 国 + 乌克兰（一键「开始市调」自动总调查）
+EU_UKRAINE = ["DE", "FR", "NL", "IT", "ES", "BE", "AT", "PL", "PT", "SE",
+              "DK", "FI", "IE", "CZ", "HU", "RO", "SK", "SI", "HR", "GR",
+              "BG", "LT", "LV", "EE", "LU", "CY", "MT", "UA"]
+
+# 市调 7 维度（判断依据拆解，热度分 = 综合研判）
+RESEARCH_DIMS = ["政策补贴", "装机增速", "经销商活跃度", "进口需求",
+                 "贸易壁垒", "新闻情绪", "竞品供应链"]
+
 
 def wa_link(phone, country=""):
     """电话 -> WhatsApp 链接（去非数字，10 位本地号按国家补区号）。"""
@@ -255,8 +264,11 @@ CARD_COLS = ["main_id", "company_name", "country", "city", "customer_type", "pho
              "reason", "pool", "domain"]
 
 
-def list_companies(query="", pool=None, country=None, limit=200, db_path=None):
-    """企业库检索（电话/企业名/域名模糊匹配 + 国家/客户池筛选），返回卡片渲染所需完整字段。"""
+def list_companies(query="", pool=None, country=None, sells_deye=None, limit=200,
+                   db_path=None):
+    """企业库检索（电话/企业名/域名模糊匹配 + 国家/客户池/是否卖 Deye 筛选），返回卡片渲染所需完整字段。
+
+    sells_deye: None=全部 / True=仅卖 Deye / False=仅不卖 Deye。"""
     conn = init_db(db_path)
     sql = f"SELECT {', '.join(CARD_COLS)} FROM companies"
     conds, params = [], []
@@ -266,6 +278,9 @@ def list_companies(query="", pool=None, country=None, limit=200, db_path=None):
     if country:
         conds.append("country=?")
         params.append(country.strip().upper())
+    if sells_deye is not None:
+        conds.append("sells_deye=?")
+        params.append(1 if sells_deye else 0)
     if query:
         q = f"%{query}%"
         conds.append("(company_name LIKE ? OR phone LIKE ? OR domain LIKE ? OR email LIKE ?)")
@@ -481,12 +496,14 @@ def is_expired(cache_expires_at, now=None):
 
 def start_research(countries=None, executor="本地本机", cache_days=CACHE_DEFAULT_DAYS,
                    db_path=None):
-    """开始市调任务：生成 mr_id、写时间戳 + 覆盖国家 + 缓存过期时间。返回 mr_id。"""
+    """开始市调任务：生成 mr_id、写时间戳 + 覆盖国家 + 缓存过期时间。返回 mr_id。
+
+    不传 countries 时默认覆盖欧盟 27 国 + 乌克兰（一键「开始市调」总调查）。"""
     conn = init_db(db_path)
     mr_id = gen_mr_id()
     now = now_iso()
     expires = (datetime.now() + timedelta(days=cache_days)).isoformat(timespec="seconds")
-    cs = json.dumps(countries or [], ensure_ascii=False)
+    cs = json.dumps(countries or EU_UKRAINE, ensure_ascii=False)
     conn.execute(
         "INSERT INTO market_tasks (mr_id, countries, executor, started_at, status, cache_expires_at) "
         "VALUES (?,?,?,?, 'running', ?)",
@@ -519,8 +536,10 @@ def finish_research(mr_id, db_path=None):
 
 
 def save_country_score(mr_id, country, score, positives="", negatives="",
-                       risks="", sources="", db_path=None):
-    """保存/更新某国家热度研判（UPSERT）。score 须 0-100 整数。"""
+                       risks="", sources="", dimensions=None, db_path=None):
+    """保存/更新某国家热度研判（UPSERT）。score 须 0-100 整数。
+
+    dimensions: 7 维度判断依据 dict {维度名: 依据一句话}（判断依据详情用）。"""
     try:
         score = int(score)
     except (TypeError, ValueError):
@@ -533,12 +552,14 @@ def save_country_score(mr_id, country, score, positives="", negatives="",
         raise ValueError(f"市调任务不存在: {mr_id}")
     now = now_iso()
     country = (country or "").strip().upper()
+    dims = json.dumps(dimensions or {}, ensure_ascii=False)
     conn.execute(
-        "INSERT INTO country_scores (mr_id, country, score, positives, negatives, risks, sources, created_at, updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?) "
+        "INSERT INTO country_scores (mr_id, country, score, positives, negatives, risks, sources, dimensions, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(mr_id, country) DO UPDATE SET score=excluded.score, positives=excluded.positives, "
-        "negatives=excluded.negatives, risks=excluded.risks, sources=excluded.sources, updated_at=excluded.updated_at",
-        (mr_id, country, score, positives, negatives, risks, sources, now, now))
+        "negatives=excluded.negatives, risks=excluded.risks, sources=excluded.sources, "
+        "dimensions=excluded.dimensions, updated_at=excluded.updated_at",
+        (mr_id, country, score, positives, negatives, risks, sources, dims, now, now))
     conn.commit()
     conn.close()
     return {"mr_id": mr_id, "country": country, "score": score}
@@ -577,7 +598,18 @@ def get_research(mr_id, db_path=None):
     d["expired"] = is_expired(d.get("cache_expires_at"))
     for s in scores:
         s["country_name"] = COUNTRY_NAMES.get(s["country"], s["country"])
+        s["dimensions"] = _parse_json(s.get("dimensions")) or {}
     return {"task": d, "scores": scores}
+
+
+def get_country_detail(mr_id, country, db_path=None):
+    """取某国家在市调任务中的完整研判（含 7 维度判断依据）。"""
+    data = get_research(mr_id, db_path=db_path)
+    country = (country or "").strip().upper()
+    for s in data["scores"]:
+        if s["country"] == country:
+            return {"task": data["task"], "detail": s}
+    raise ValueError(f"该市调任务未收录国家: {country}")
 
 
 def latest_research_ranking(db_path=None):

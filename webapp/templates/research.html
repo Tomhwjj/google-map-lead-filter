@@ -2,12 +2,22 @@
 {% block title %}市调{% endblock %}
 {% block content %}
 <h1>市场热度排名（开发优先级）</h1>
-<p class="hint">Agent 深度研判各国市场热度（0–100），按得分降序排开发优先级——热度高先获客。每国可直接「开始获客」。<a href="{{ url_for('research_new') }}">＋ 新建市调任务</a></p>
+<p class="hint">
+  Agent 对<b>欧盟 27 国 + 乌克兰</b>（28 国）做欧洲市场总调查，按热度降序排开发优先级——热度高先获客，给出前 10 名优先开发建议。每国可看详细研判依据，也可直接「开始获客」。
+  <a href="{{ url_for('research_new') }}">＋ 自定义市调</a>
+</p>
+
+{% if not ranking or not ranking.scores %}
+<form method="post" action="{{ url_for('research_start') }}" class="inline" style="margin:16px 0;">
+  <button class="primary">🔎 开始市调（欧盟 27 国 + 乌克兰，无需选国家）</button>
+</form>
+{% endif %}
 
 {% if ranking and ranking.scores %}
 <div class="hint">
   最新市调任务 <code>{{ ranking.task.mr_id }}</code> ·
   执行人 {{ ranking.task.executor or '—' }} ·
+  已评 {{ ranking.scores | length }}/{{ ranking.task.countries_list | length }} 国 ·
   缓存截止 {{ ranking.task.cache_expires_at or '—' }}
   {% if ranking.task.expired %}<span class="error">⚠️ 过期</span>{% endif %}
   <a href="{{ url_for('research_report_md', mr_id=ranking.task.mr_id) }}">导出复盘报告(.md)</a>
@@ -20,24 +30,28 @@
   {% set scolor = '#16a34a' if s.score >= 80 else ('#d97706' if s.score >= 50 else '#6b7280') %}
   <div class="rank-card">
     <div class="rank-badge {{ cls }}">{{ loop.index }}</div>
-    <div class="rank-country"><span class="rank-name">{{ s.country_name }}</span><span class="rank-code">{{ s.country }}</span></div>
+    <div class="rank-country">
+      <span class="rank-name">{{ s.country_name }}</span>
+      <span class="rank-code">{{ s.country }}</span>
+      {% if loop.index <= 10 %}<span class="rank-priority">⭐ 优先开发</span>{% endif %}
+    </div>
     <div class="rank-score" style="color:{{ scolor }}">{{ s.score }}</div>
     <div class="rank-body">
       {% if s.positives %}<div class="rank-line"><b>利好</b>{{ s.positives }}</div>{% endif %}
       {% if s.negatives %}<div class="rank-line"><b>利空</b>{{ s.negatives }}</div>{% endif %}
       {% if s.risks %}<div class="rank-line risk"><b>风险</b>{{ s.risks }}</div>{% endif %}
     </div>
-    <a class="rank-btn" href="{{ url_for('tasks_new', country=s.country) }}">开始获客 →</a>
+    <div class="rank-actions">
+      <a class="rank-btn" href="{{ url_for('research_country', mr_id=ranking.task.mr_id, country=s.country) }}">详细研判依据 →</a>
+      <a class="rank-btn primary" href="{{ url_for('tasks_new', country=s.country) }}">开始获客 →</a>
+    </div>
   </div>
   {% endfor %}
 </div>
-{% else %}
-<p class="empty">还没有可用的市场热度排名。</p>
-<p class="hint">
-  市调分两步：① <a href="{{ url_for('research_new') }}">新建市调任务</a>填目标国家；
-  ② Agent 对每个国家做深度研判后，在「录入/更新研判」页逐个录入热度得分（0–100）。
-  录完后这里自动按得分降序排出开发优先级。
-</p>
+{% endif %}
+
+{% if not ranking %}
+<p class="empty">还没有市调任务。点上方「开始市调」一键对 28 国做欧洲市场总调查。</p>
 {% endif %}
 
 {% if items %}

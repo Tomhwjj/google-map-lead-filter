@@ -13,7 +13,6 @@
     <a href="{{ url_for('index') }}" class="{{ 'active' if request.endpoint == 'index' }}">仪表盘</a>
     <a href="{{ url_for('research') }}" class="{{ 'active' if request.endpoint == 'research' }}">市调</a>
     <a href="{{ url_for('tasks_new') }}" class="{{ 'active' if request.endpoint == 'tasks_new' }}">新建任务</a>
-    <a href="{{ url_for('ingest') }}" class="{{ 'active' if request.endpoint == 'ingest' }}">入库</a>
     <a href="{{ url_for('diffs') }}" class="{{ 'active' if request.endpoint == 'diffs' }}">差异审核</a>
     <a href="{{ url_for('pool') }}" class="{{ 'active' if request.endpoint == 'pool' }}">客户池</a>
     <a href="{{ url_for('companies') }}" class="{{ 'active' if request.endpoint == 'companies' }}">企业库</a>

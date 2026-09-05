@@ -16,6 +16,7 @@
 </div>
 
 <form method="get" class="form row-form">
+  <input type="text" name="q" value="{{ q }}" placeholder="企业名 / 电话 / 域名 / 邮箱">
   <select name="country">
     <option value="">全部国家</option>
     {% for c in countries %}<option value="{{ c.country }}" {{ 'selected' if country == c.country }}>{{ c.name }}（{{ c.n }}）</option>{% endfor %}
@@ -24,14 +25,19 @@
     <option value="">全部客户池</option>
     {% for p in pools %}<option value="{{ p }}" {{ 'selected' if pool == p }}>{{ p }}</option>{% endfor %}
   </select>
+  <select name="deye">
+    <option value="">是否卖 Deye：全部</option>
+    <option value="yes" {{ 'selected' if deye == 'yes' }}>卖 Deye</option>
+    <option value="no" {{ 'selected' if deye == 'no' }}>不卖 Deye</option>
+  </select>
   <button type="submit">筛选</button>
   {% if has_filter %}<a href="{{ url_for('pool') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);">清空</a>{% endif %}
 </form>
 
 {% if has_filter %}
-<h2>{{ pool or '全部池' }}{% if country %} · {{ country }}{% endif %}（{{ items | length }} 家）</h2>
+<h2>{{ pool or '全部池' }}{% if country %} · {{ country }}{% endif %}{% if q %} · 搜“{{ q }}”{% endif %}{% if deye %} · {{ '卖 Deye' if deye == 'yes' else '不卖 Deye' }}{% endif %}（{{ items | length }} 家）</h2>
 {% if items %}
-{{ cards_block(items, pools, url_for('pool', pool=pool, country=country)) }}
+{{ cards_block(items, pools, url_for('pool', pool=pool, country=country, q=q, deye=deye)) }}
 {% else %}<p class="empty">该筛选下暂无企业。</p>{% endif %}
 {% else %}
 <h2>最近换池轨迹</h2>

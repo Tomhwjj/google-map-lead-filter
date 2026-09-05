@@ -5,17 +5,17 @@
 
 页面：
   /                     仪表盘（任务列表 + 企业库概览）
-  /tasks/new            新建获客任务（国家/关键词/数据源 → 生成 task_id）
+  /tasks/new            新建获客任务（国家/关键词/数据源 → 生成 task_id，获客自动入库）
   /tasks/<id>           任务详情（复刻报告数据 + 新增企业清单 + 差异清单）
   /tasks/<id>/report.md 导出复刻报告
-  /ingest               入库（选任务 + 贴评分 JSON → 三段式比对）
   /diffs                差异审核队列（approve 覆盖 / reject 忽略）
   /companies            企业库检索（电话/企业名/域名），行内快捷换池
   /pool                 客户池总览（五池统计 + 各池列表 + 换池轨迹）
   /companies/<main_id>  企业详情（全字段 + 客户池轨迹 + 换池备注）
-  /research             市调任务列表（历史 + 过期标记）
-  /research/new         新建市调任务（目标国家 + 执行人 + 缓存天数）
+  /research             市调排名看板（一键「开始市调」28 国 + 前10优先 + 单国详情）
+  /research/start       一键开始市调（POST，默认欧盟 27 国 + 乌克兰）
   /research/<mr_id>     市调详情（各国热度研判录入 + 得分排序 + 复盘报告）
+  /research/<mr_id>/country/<country>  单国研判详情（7 维度判断依据）
 
 启动:
     python webapp/app.py        # 端口 8766，自动打开浏览器
@@ -33,11 +33,12 @@ PROJECT_ROOT = os.path.dirname(APP_DIR)
 SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
-from core import (build_report, change_pool, finish_research, get_company,
-                  get_research, ingest_leads, latest_research_ranking,
-                  list_companies, list_countries, list_diffs, list_pool_log,
-                  list_research, list_tasks, pool_stats, review_diff,
-                  save_country_score, start_research, start_task)
+from core import (RESEARCH_DIMS, build_report, change_pool, finish_research,
+                  get_company, get_country_detail, get_research,
+                  latest_research_ranking, list_companies, list_countries,
+                  list_diffs, list_pool_log, list_research, list_tasks,
+                  pool_stats, review_diff, save_country_score, start_research,
+                  start_task)
 from db import POOLS, get_conn, init_db
 from render_task_report import render_md, render_report
 from render_research_report import (render_md as render_research_md,
@@ -48,6 +49,16 @@ PORT = 8766
 app = Flask(__name__,
             template_folder=os.path.join(APP_DIR, "templates"),
             static_folder=os.path.join(APP_DIR, "static"))
+
+
+def _parse_deye(deye):
+    """把「是否卖 Deye」下拉值转成 list_companies 的 sells_deye 参数（None/True/False）。"""
+    deye = (deye or "").strip().lower()
+    if deye == "yes":
+        return True
+    if deye == "no":
+        return False
+    return None
 
 
 @app.route("/")
@@ -99,27 +110,6 @@ def task_report_md(task_id):
                               headers={"Content-Disposition": f"attachment; filename=复刻报告_{task_id}.md"})
 
 
-@app.route("/ingest", methods=["GET", "POST"])
-def ingest():
-    result = None
-    error = None
-    if request.method == "POST":
-        task_id = (request.form.get("task_id") or "").strip()
-        leads_raw = (request.form.get("leads_json") or "").strip()
-        action = request.form.get("action") or "commit"
-        dry_run = (action == "preview")
-        try:
-            leads = json.loads(leads_raw)
-            if not isinstance(leads, list):
-                raise ValueError("JSON 必须是数组（list）")
-            stats = ingest_leads(leads, task_id, dry_run=dry_run)
-            result = {"task_id": task_id, "stats": stats, "dry_run": dry_run}
-        except Exception as e:
-            error = f"入库失败: {e}"
-    tasks = list_tasks()
-    return render_template("ingest.html", tasks=tasks, result=result, error=error)
-
-
 @app.route("/diffs", methods=["GET"])
 def diffs():
     status = request.args.get("status", "pending")
@@ -139,24 +129,31 @@ def companies():
     q = request.args.get("q", "").strip()
     pool = request.args.get("pool", "").strip()
     country = request.args.get("country", "").strip()
-    items = list_companies(query=q, pool=pool or None, country=country or None)
+    deye = request.args.get("deye", "").strip()
+    sells_deye = _parse_deye(deye)
+    items = list_companies(query=q, pool=pool or None, country=country or None,
+                           sells_deye=sells_deye)
     countries = list_countries()
     return render_template("companies.html", items=items, q=q, pool=pool,
-                           country=country, pools=POOLS, countries=countries)
+                           country=country, deye=deye, pools=POOLS, countries=countries)
 
 
 @app.route("/pool", methods=["GET"])
 def pool():
     pool_filter = request.args.get("pool", "").strip() or None
     country = request.args.get("country", "").strip() or None
+    q = request.args.get("q", "").strip()
+    deye = request.args.get("deye", "").strip()
+    sells_deye = _parse_deye(deye)
     stats = pool_stats()
     countries = list_countries()
-    has_filter = bool(pool_filter or country)
-    items = list_companies(pool=pool_filter, country=country, limit=300) if has_filter else []
+    has_filter = bool(pool_filter or country or q or sells_deye is not None)
+    items = list_companies(query=q, pool=pool_filter, country=country,
+                           sells_deye=sells_deye, limit=300) if has_filter else []
     logs = list_pool_log(limit=50) if not has_filter else []
     return render_template("pool.html", stats=stats, pool=pool_filter, pools=POOLS,
                            items=items, logs=logs, country=country, countries=countries,
-                           has_filter=has_filter)
+                           has_filter=has_filter, q=q, deye=deye)
 
 
 @app.route("/companies/<main_id>", methods=["GET"])
@@ -199,6 +196,14 @@ def research():
     return render_template("research.html", items=items, ranking=ranking)
 
 
+@app.route("/research/start", methods=["POST"])
+def research_start():
+    """一键开始市调：默认欧盟 27 国 + 乌克兰总调查（无需选国家）。"""
+    executor = (request.form.get("executor") or "智能体").strip()
+    mr_id = start_research(countries=None, executor=executor)
+    return redirect(url_for("research_detail", mr_id=mr_id))
+
+
 @app.route("/research/new", methods=["GET", "POST"])
 def research_new():
     if request.method == "POST":
@@ -226,13 +231,29 @@ def research_detail(mr_id):
     scores = data["scores"]
     scored_countries = {s["country"] for s in scores}
     return render_template("research_detail.html", task=task, scores=scores,
-                           scored_countries=scored_countries)
+                           scored_countries=scored_countries, dims=RESEARCH_DIMS)
+
+
+@app.route("/research/<mr_id>/country/<country>", methods=["GET"])
+def research_country(mr_id, country):
+    """单国研判详情：热度分 + 7 维度判断依据 + 利好利空风险 + 来源。"""
+    try:
+        data = get_country_detail(mr_id, country)
+    except ValueError as e:
+        return render_template("error.html", msg=str(e)), 404
+    return render_template("country_detail.html", task=data["task"],
+                           detail=data["detail"], dims=RESEARCH_DIMS)
 
 
 @app.route("/research/<mr_id>/score", methods=["POST"])
 def research_score(mr_id):
     country = (request.form.get("country") or "").strip().upper()
     try:
+        dimensions = {}
+        for d in RESEARCH_DIMS:
+            note = (request.form.get(f"dim_{d}") or "").strip()
+            if note:
+                dimensions[d] = note
         save_country_score(
             mr_id, country,
             score=request.form.get("score") or 0,
@@ -240,6 +261,7 @@ def research_score(mr_id):
             negatives=(request.form.get("negatives") or "").strip(),
             risks=(request.form.get("risks") or "").strip(),
             sources=(request.form.get("sources") or "").strip(),
+            dimensions=dimensions,
         )
     except ValueError as e:
         return render_template("error.html", msg=str(e)), 400

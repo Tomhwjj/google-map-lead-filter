@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}{{ detail.country_name }} · 详细研判{% endblock %}
+{% block content %}
+<h1>{{ detail.country_name }} <small style="font-weight:normal;">{{ detail.country }}</small></h1>
+<p class="hint">
+  市调任务 <code>{{ task.mr_id }}</code> ·
+  执行人 {{ task.executor or '—' }}
+  <a href="{{ url_for('research') }}" style="margin-left:8px;">← 返回热度排名</a>
+  <a href="{{ url_for('research_detail', mr_id=task.mr_id) }}" style="margin-left:8px;">录入/更新研判</a>
+</p>
+
+{% if task.expired %}<p class="error">⚠️ 缓存已过期（{{ task.cache_expires_at }}），建议重搜更新热度。</p>{% endif %}
+
+<div class="stats">
+  <div class="stat"><b>{{ detail.score }}</b><span>热度得分</span></div>
+  <div class="stat"><b>{{ detail.country_name }}</b><span>国家</span></div>
+</div>
+
+<div class="row">
+  <a class="btn primary" href="{{ url_for('tasks_new', country=detail.country) }}">🚀 开始获客（{{ detail.country }}）</a>
+</div>
+
+<h2>判断依据（7 维度）</h2>
+{% if detail.dimensions %}
+<table>
+  <thead><tr><th style="width:130px;">维度</th><th>判断依据</th></tr></thead>
+  <tbody>
+  {% for d in dims %}
+    <tr>
+      <td><b>{{ d }}</b></td>
+      <td>{{ detail.dimensions.get(d, '—') }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">该国家尚未录入 7 维度判断依据。</p>
+{% endif %}
+
+<h2>核心利好</h2>
+<p>{% if detail.positives %}{{ detail.positives }}{% else %}<span class="empty">—</span>{% endif %}</p>
+
+<h2>核心利空</h2>
+<p>{% if detail.negatives %}{{ detail.negatives }}{% else %}<span class="empty">—</span>{% endif %}</p>
+
+<h2>风险点</h2>
+<p>{% if detail.risks %}{{ detail.risks }}{% else %}<span class="empty">—</span>{% endif %}</p>
+
+<h2>信息来源快照</h2>
+<p>{% if detail.sources %}{{ detail.sources }}{% else %}<span class="empty">—</span>{% endif %}</p>
+{% endblock %}
