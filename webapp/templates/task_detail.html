@@ -66,4 +66,26 @@
   </tbody>
 </table>
 {% else %}<p class="empty">本次无差异。</p>{% endif %}
+
+<h2>获客问题清单（{{ data.issues | length }}）</h2>
+{% if data.issues %}
+<table>
+  <thead><tr><th>分类</th><th>问题</th><th>状态</th><th>解决方案</th></tr></thead>
+  <tbody>
+  {% for it in data.issues %}
+    <tr class="{{ 'pending' if it.status == 'open' else '' }}">
+      <td>{{ it.category or '' }}</td>
+      <td><b>{{ it.title }}</b>{% if it.detail %}<br><small class="muted">{{ it.detail }}</small>{% endif %}</td>
+      <td>
+        {% if it.status == 'resolved' %}✅ 已解决
+        {% elif it.status == 'open' %}⏳ 待处理
+        {% elif it.status == 'deferred' %}📌 已搁置
+        {% else %}{{ it.status }}{% endif %}
+      </td>
+      <td>{{ it.solution or '' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="empty">本次无记录问题。</p>{% endif %}
 {% endblock %}

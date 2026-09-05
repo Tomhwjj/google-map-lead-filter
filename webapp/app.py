@@ -36,9 +36,9 @@ sys.path.insert(0, SCRIPTS_DIR)
 from core import (RESEARCH_DIMS, build_report, change_pool, finish_research,
                   get_company, get_country_detail, get_research,
                   latest_research_ranking, list_companies, list_countries,
-                  list_diff_groups, list_pool_log, list_research, list_tasks,
-                  pool_stats, review_diff, save_country_score, start_research,
-                  start_task)
+                  list_diff_groups, list_pool_log, list_research, list_task_issues,
+                  list_tasks, pool_stats, review_diff, save_country_score,
+                  start_research, start_task)
 from db import POOLS, get_conn, init_db
 from render_task_report import render_md, render_report
 from render_research_report import (render_md as render_research_md,
@@ -70,9 +70,10 @@ def index():
     running_tasks = conn.execute("SELECT COUNT(*) FROM tasks WHERE status='running'").fetchone()[0]
     conn.close()
     stats = pool_stats()
+    open_issues = len(list_task_issues(status="open"))
     return render_template("index.html", tasks=tasks, total_companies=total_companies,
                            pending_diffs=pending_diffs, running_tasks=running_tasks,
-                           pool_stats=stats, pools=POOLS)
+                           open_issues=open_issues, pool_stats=stats, pools=POOLS)
 
 
 @app.route("/tasks/start/<country>", methods=["POST"])

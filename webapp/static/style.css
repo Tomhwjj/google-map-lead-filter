@@ -91,6 +91,9 @@ button.muted { color: var(--gray); }
 tr.pending { background: #fffbeb; }
 tr.pending td:first-child code { color: #b45309; font-weight: 600; }
 
+/* 灰色小字（问题详情等辅助说明） */
+small.muted { color: var(--gray); font-size: 0.85em; }
+
 .btn { display: inline-block; padding: 8px 16px; background: var(--green); color: #fff !important; text-decoration: none; border-radius: 6px; }
 
 .empty { color: var(--gray); }
