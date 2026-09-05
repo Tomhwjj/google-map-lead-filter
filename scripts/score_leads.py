@@ -61,6 +61,24 @@ def grade_of(score):
     return "C"
 
 
+def dev_reason(grade, basis):
+    """中文开发理由：一句话结论（等级 · 渠道 · 产品 · 触达）。
+
+    basis = {'产品匹配':..., '渠道':..., '规模':..., '触达':...}（中文评分依据）
+    例：A级 · 批发/分销商 · 已代理Deye · 电话(可WhatsApp)
+    """
+    ch = basis.get("渠道", "")
+    prod = basis.get("产品匹配", "")
+    cont = basis.get("触达", "")
+    if prod.startswith("已卖Deye"):
+        prod_short = "已代理Deye"
+    elif "竞品" in prod:
+        prod_short = "卖竞品/光伏"
+    else:
+        prod_short = "无产品证据"
+    return f"{grade}级 · {ch} · {prod_short} · {cont}"
+
+
 def _brand_match(brand, deye):
     """词边界匹配，避免 INGE 误命中 Ingenieur/springen、Fusion 误命中 FusionSolar。"""
     return re.search(r"(?<![a-z0-9])" + re.escape(deye) + r"(?![a-z0-9])", brand.lower()) is not None
@@ -184,6 +202,7 @@ def score_lead(lead):
         "sells_deye": sells_deye(brands),
         "score": score_h, "grade": grade_of(score_h), "score_detail": detail_h, "score_basis": basis_h,
         "score_lt": score_t, "grade_lt": grade_of(score_t), "score_detail_lt": detail_t, "score_basis_lt": basis_t,
+        "reason": dev_reason(grade_of(score_h), basis_h),
     }
 
 
