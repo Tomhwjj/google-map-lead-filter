@@ -138,6 +138,56 @@ def add_contact(session, name, email, note):
     return resp.json().get("resourceName", "")
 
 
+# 联系人分组：所有由本 skill 同步的企业都归到这个分组
+GROUP_NAME = "由skill同步的企业"
+
+
+def get_or_create_group(session, name=GROUP_NAME):
+    """获取（或创建）联系人分组，返回 group resourceName（contactGroups/xxx）。"""
+    resp = session.get("https://people.googleapis.com/v1/contactGroups",
+                       params={"pageSize": 1000})
+    resp.raise_for_status()
+    for g in resp.json().get("contactGroups", []):
+        if g.get("name") == name:
+            return g["resourceName"]
+    resp = session.post("https://people.googleapis.com/v1/contactGroups",
+                        json={"contactGroup": {"name": name}})
+    resp.raise_for_status()
+    return resp.json()["resourceName"]
+
+
+def add_contacts_to_group(session, group_resource, person_resources):
+    """把一批联系人加进分组（members:modify 单次最多 100，自动分批）。
+
+    Google 对「已在分组的成员」重复添加会返回 409，这里降级为逐个添加、跳过已存在的，
+    保证幂等可重试。返回本次实际新加入分组的条数。"""
+    person_resources = [p for p in person_resources if p]
+    if not person_resources:
+        return 0
+    url = f"https://people.googleapis.com/v1/{group_resource}/members:modify"
+    added = 0
+    for i in range(0, len(person_resources), 100):
+        batch = person_resources[i:i + 100]
+        try:
+            resp = session.post(url, json={"resourceNamesToAdd": batch})
+            resp.raise_for_status()
+            added += len(batch)
+        except Exception as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status != 409:
+                raise
+            # 409：批次里混了已在分组的成员 → 逐个重试，跳过已存在的
+            for p in batch:
+                try:
+                    r = session.post(url, json={"resourceNamesToAdd": [p]})
+                    r.raise_for_status()
+                    added += 1
+                except Exception:
+                    # 单个也失败（已在组/无效），跳过不计
+                    pass
+    return added
+
+
 def _pending_emails(conn):
     """返回已同步的 (main_id, email) 集合（已 synced 的跳过，避免重复加联系人）。"""
     done = set()
@@ -152,8 +202,10 @@ def sync_all(service, dry_run=False, db_path=None):
     done = _pending_emails(conn)
     companies = list_companies(has_email=True, db_path=db_path)
     account = get_email_account(db_path=db_path)
+    group_resource = None if dry_run else get_or_create_group(service)
 
     added = skipped = failed = 0
+    added_resources = []
     for c in companies:
         emails = c.get("email_list") or []
         for i, email in enumerate(emails, start=1):
@@ -173,6 +225,7 @@ def sync_all(service, dry_run=False, db_path=None):
                 resource = add_contact(service, c["company_name"], email, note)
                 mark_gmail_contact(c["main_id"], email, note, resource_name=resource,
                                    status="synced", db_path=db_path)
+                added_resources.append(resource)
                 print(f"✓ {c['company_name']}: {email} → {resource}")
                 added += 1
             except Exception as e:
@@ -180,6 +233,12 @@ def sync_all(service, dry_run=False, db_path=None):
                                    error=str(e), db_path=db_path)
                 print(f"✗ {c['company_name']}: {email} 失败 {e}")
                 failed += 1
+    if group_resource and added_resources and not dry_run:
+        try:
+            n = add_contacts_to_group(service, group_resource, added_resources)
+            print(f"✓ 已把 {n} 条联系人归入分组「{GROUP_NAME}」")
+        except Exception as e:
+            print(f"⚠️ 归组失败：{e}")
     if account and not dry_run:
         update_email_account_sync(account["account_email"], db_path=db_path)
     conn.close()
@@ -196,7 +255,9 @@ def sync_company(service, main_id, dry_run=False, db_path=None):
     if not company:
         conn.close()
         raise ValueError(f"企业不存在: {main_id}")
+    group_resource = None if dry_run else get_or_create_group(service)
     added = skipped = failed = 0
+    added_resources = []
     for i, email in enumerate(company.get("email_list") or [], start=1):
         key = (main_id, email.lower())
         if key in done:
@@ -214,14 +275,45 @@ def sync_company(service, main_id, dry_run=False, db_path=None):
             resource = add_contact(service, company["company_name"], email, note)
             mark_gmail_contact(main_id, email, note, resource_name=resource,
                                status="synced", db_path=db_path)
+            added_resources.append(resource)
             print(f"✓ {email} → {resource}")
             added += 1
         except Exception as e:
             mark_gmail_contact(main_id, email, note, status="failed", error=str(e), db_path=db_path)
             print(f"✗ {email} 失败 {e}")
             failed += 1
+    if group_resource and added_resources and not dry_run:
+        try:
+            n = add_contacts_to_group(service, group_resource, added_resources)
+            print(f"✓ 已把 {n} 条联系人归入分组「{GROUP_NAME}」")
+        except Exception as e:
+            print(f"⚠️ 归组失败：{e}")
     conn.close()
     return {"added": added, "skipped": skipped, "failed": failed}
+
+
+def group_synced(db_path=None, dry_run=False):
+    """把 DB 里所有 status='synced' 的联系人批量归入分组（处理历史已同步的）。"""
+    conn = init_db(db_path)
+    rows = [r["contact_resource_name"] for r in conn.execute(
+        "SELECT contact_resource_name FROM gmail_contacts "
+        "WHERE status='synced' AND contact_resource_name IS NOT NULL "
+        "AND contact_resource_name != ''")]
+    conn.close()
+    if not rows:
+        print("没有已同步的联系人，无需归组。")
+        return 0
+    creds = get_credentials()
+    if not (creds and creds.valid):
+        raise SystemExit("尚未授权，先跑：python scripts/gmail_sync.py authorize")
+    session = build_people(creds)
+    group_resource = get_or_create_group(session)
+    if dry_run:
+        print(f"[dry-run] 会把 {len(rows)} 条已同步联系人归入分组「{GROUP_NAME}」")
+        return len(rows)
+    n = add_contacts_to_group(session, group_resource, rows)
+    print(f"✓ 已把 {n} 条已同步联系人归入分组「{GROUP_NAME}」")
+    return n
 
 
 def status(db_path=None):
@@ -243,7 +335,7 @@ def status(db_path=None):
 
 def main():
     ap = argparse.ArgumentParser(description="企业邮箱(Gmail)绑定 + 联系人自动同步")
-    ap.add_argument("cmd", choices=["authorize", "status", "sync"], help="authorize=首次授权 / status=状态 / sync=同步联系人")
+    ap.add_argument("cmd", choices=["authorize", "status", "sync", "group"], help="authorize=首次授权 / status=状态 / sync=同步联系人 / group=已同步联系人批量归组")
     ap.add_argument("main_id", nargs="?", help="sync 时可选：只同步某企业 main_id")
     ap.add_argument("--dry-run", action="store_true", help="预览不落库/不调 API")
     ap.add_argument("--account", default="", help="绑定账号邮箱（authorize 后落 email_accounts）")
@@ -269,6 +361,8 @@ def main():
             sync_company(service, args.main_id, dry_run=args.dry_run)
         else:
             sync_all(service, dry_run=args.dry_run)
+    elif args.cmd == "group":
+        group_synced(dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
