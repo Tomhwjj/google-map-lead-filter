@@ -23,7 +23,9 @@
 import argparse
 import json
 import os
+import re
 import sys
+from datetime import datetime
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -188,6 +190,56 @@ def add_contacts_to_group(session, group_resource, person_resources):
     return added
 
 
+# ---------------------------------------------------------------------------
+# 联系人分组：按「批次 + 每组最多50」拆到 skill1~skillN（替代原来的单一总组）
+# ---------------------------------------------------------------------------
+
+def _max_skill_group_num(session):
+    """遍历现有分组，返回 skill{编号} 的最大编号（没有则 0）。"""
+    resp = session.get("https://people.googleapis.com/v1/contactGroups",
+                       params={"pageSize": 1000})
+    resp.raise_for_status()
+    mx = 0
+    for g in resp.json().get("contactGroups", []):
+        m = re.match(r"^skill(\d+)$", g.get("name", ""))
+        if m:
+            mx = max(mx, int(m.group(1)))
+    return mx
+
+
+def get_or_create_skill_group(session, num):
+    """获取（或创建）名为 skill{num} 的分组，返回 resourceName。"""
+    return get_or_create_group(session, name=f"skill{num}")
+
+
+def delete_group_by_name(session, name):
+    """按名字删除联系人分组（删分组不删联系人，成员只是移出该组）。返回是否删到。"""
+    resp = session.get("https://people.googleapis.com/v1/contactGroups",
+                       params={"pageSize": 1000})
+    resp.raise_for_status()
+    for g in resp.json().get("contactGroups", []):
+        if g.get("name") == name:
+            d = session.delete(f"https://people.googleapis.com/v1/{g['resourceName']}")
+            d.raise_for_status()
+            return True
+    return False
+
+
+def assign_to_skill_groups(session, resources, start_num):
+    """把一批联系人按「每组最多50」从 skill{start_num} 起依次归组，返回实际归入条数。"""
+    resources = [r for r in resources if r]
+    if not resources:
+        return 0
+    total = 0
+    num = start_num
+    for i in range(0, len(resources), 50):
+        batch = resources[i:i + 50]
+        grp = get_or_create_skill_group(session, num)
+        total += add_contacts_to_group(session, grp, batch)
+        num += 1
+    return total
+
+
 def _pending_emails(conn):
     """返回已同步的 (main_id, email) 集合（已 synced 的跳过，避免重复加联系人）。"""
     done = set()
@@ -202,7 +254,6 @@ def sync_all(service, dry_run=False, db_path=None):
     done = _pending_emails(conn)
     companies = list_companies(has_email=True, db_path=db_path)
     account = get_email_account(db_path=db_path)
-    group_resource = None if dry_run else get_or_create_group(service)
 
     added = skipped = failed = 0
     added_resources = []
@@ -233,10 +284,11 @@ def sync_all(service, dry_run=False, db_path=None):
                                    error=str(e), db_path=db_path)
                 print(f"✗ {c['company_name']}: {email} 失败 {e}")
                 failed += 1
-    if group_resource and added_resources and not dry_run:
+    if added_resources and not dry_run:
         try:
-            n = add_contacts_to_group(service, group_resource, added_resources)
-            print(f"✓ 已把 {n} 条联系人归入分组「{GROUP_NAME}」")
+            start_num = _max_skill_group_num(service) + 1
+            n = assign_to_skill_groups(service, added_resources, start_num)
+            print(f"✓ 已把 {n} 条联系人归入 skill{start_num} 起的分组（每组≤50）")
         except Exception as e:
             print(f"⚠️ 归组失败：{e}")
     if account and not dry_run:
@@ -255,7 +307,6 @@ def sync_company(service, main_id, dry_run=False, db_path=None):
     if not company:
         conn.close()
         raise ValueError(f"企业不存在: {main_id}")
-    group_resource = None if dry_run else get_or_create_group(service)
     added = skipped = failed = 0
     added_resources = []
     for i, email in enumerate(company.get("email_list") or [], start=1):
@@ -282,38 +333,79 @@ def sync_company(service, main_id, dry_run=False, db_path=None):
             mark_gmail_contact(main_id, email, note, status="failed", error=str(e), db_path=db_path)
             print(f"✗ {email} 失败 {e}")
             failed += 1
-    if group_resource and added_resources and not dry_run:
+    if added_resources and not dry_run:
         try:
-            n = add_contacts_to_group(service, group_resource, added_resources)
-            print(f"✓ 已把 {n} 条联系人归入分组「{GROUP_NAME}」")
+            start_num = _max_skill_group_num(service) + 1
+            n = assign_to_skill_groups(service, added_resources, start_num)
+            print(f"✓ 已把 {n} 条联系人归入 skill{start_num} 起的分组（每组≤50）")
         except Exception as e:
             print(f"⚠️ 归组失败：{e}")
     conn.close()
     return {"added": added, "skipped": skipped, "failed": failed}
 
 
-def group_synced(db_path=None, dry_run=False):
-    """把 DB 里所有 status='synced' 的联系人批量归入分组（处理历史已同步的）。"""
+def split_skill_groups(db_path=None, dry_run=False):
+    """把历史已同步联系人按「批次 + 每组最多50」拆到 skill1~skillN，并删除原总组。
+
+    批次识别：相邻 synced_at 间隔 > 10 分钟视为新一批（每次点同步 = 一批）。
+    历史数据只做一次拆分；后续同步由 sync_all/sync_company 自动「满50换组」。
+    """
     conn = init_db(db_path)
-    rows = [r["contact_resource_name"] for r in conn.execute(
-        "SELECT contact_resource_name FROM gmail_contacts "
+    rows = conn.execute(
+        "SELECT contact_resource_name, synced_at FROM gmail_contacts "
         "WHERE status='synced' AND contact_resource_name IS NOT NULL "
-        "AND contact_resource_name != ''")]
+        "AND contact_resource_name != '' AND synced_at IS NOT NULL "
+        "ORDER BY synced_at").fetchall()
     conn.close()
     if not rows:
-        print("没有已同步的联系人，无需归组。")
+        print("没有已同步的联系人，无需拆分。")
         return 0
+
+    # 批次切分：间隔 > 10 分钟算新一批
+    batches = []
+    cur = []
+    prev = None
+    for r in rows:
+        t = datetime.fromisoformat(r["synced_at"])
+        if prev is not None and (t - prev).total_seconds() > 600:
+            batches.append(cur)
+            cur = []
+        cur.append(r["contact_resource_name"])
+        prev = t
+    if cur:
+        batches.append(cur)
+
+    # 每批内每 50 切一组，从 skill1 连续编号
+    plan = []
+    num = 1
+    for b in batches:
+        for i in range(0, len(b), 50):
+            plan.append((f"skill{num}", b[i:i + 50]))
+            num += 1
+
+    if dry_run:
+        print(f"[dry-run] 会把 {len(rows)} 条按 {len(batches)} 个批次拆成 {len(plan)} 组：")
+        for name, res in plan:
+            print(f"  {name}: {len(res)} 条")
+        print(f"[dry-run] 拆分后删除原分组「{GROUP_NAME}」")
+        return len(rows)
+
     creds = get_credentials()
     if not (creds and creds.valid):
         raise SystemExit("尚未授权，先跑：python scripts/gmail_sync.py authorize")
     session = build_people(creds)
-    group_resource = get_or_create_group(session)
-    if dry_run:
-        print(f"[dry-run] 会把 {len(rows)} 条已同步联系人归入分组「{GROUP_NAME}」")
-        return len(rows)
-    n = add_contacts_to_group(session, group_resource, rows)
-    print(f"✓ 已把 {n} 条已同步联系人归入分组「{GROUP_NAME}」")
-    return n
+    total = 0
+    for name, res in plan:
+        grp = get_or_create_group(session, name)
+        n = add_contacts_to_group(session, grp, res)
+        total += n
+        print(f"✓ {name}: 归入 {n} 条")
+    if delete_group_by_name(session, GROUP_NAME):
+        print(f"✓ 已删除原分组「{GROUP_NAME}」")
+    else:
+        print(f"⚠️ 未找到原分组「{GROUP_NAME}」（可能已删或改名）")
+    print(f"✓ 完成：{total} 条拆入 {len(plan)} 组")
+    return total
 
 
 def status(db_path=None):
@@ -335,7 +427,7 @@ def status(db_path=None):
 
 def main():
     ap = argparse.ArgumentParser(description="企业邮箱(Gmail)绑定 + 联系人自动同步")
-    ap.add_argument("cmd", choices=["authorize", "status", "sync", "group"], help="authorize=首次授权 / status=状态 / sync=同步联系人 / group=已同步联系人批量归组")
+    ap.add_argument("cmd", choices=["authorize", "status", "sync", "skill"], help="authorize=首次授权 / status=状态 / sync=同步联系人 / skill=历史已同步按批次拆组(每组≤50)")
     ap.add_argument("main_id", nargs="?", help="sync 时可选：只同步某企业 main_id")
     ap.add_argument("--dry-run", action="store_true", help="预览不落库/不调 API")
     ap.add_argument("--account", default="", help="绑定账号邮箱（authorize 后落 email_accounts）")
@@ -361,8 +453,8 @@ def main():
             sync_company(service, args.main_id, dry_run=args.dry_run)
         else:
             sync_all(service, dry_run=args.dry_run)
-    elif args.cmd == "group":
-        group_synced(dry_run=args.dry_run)
+    elif args.cmd == "skill":
+        split_skill_groups(dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

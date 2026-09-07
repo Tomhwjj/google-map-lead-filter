@@ -20,6 +20,7 @@
   - **数据清洗**：删 25 家噪声企业（JUNK_HOSTS，JSON 导出 + DB 备份）→ 378 家；清 4 家垃圾邮箱（20 条）；修 26 家标题污染企业名（NAME_FIX）。脚本 `scripts/clean_data.py`（--dry-run 预览）。
   - **企业邮箱(Gmail)集成 + UI 整合**：绑定 `hsh@wccsolar.es`，OAuth 授权完成（refresh token 落 `data/gmail_token.json`）。踩坑：googleapiclient 默认 httplib2 对 HTTP 代理 https 隧道有 bug（WinError 10060），改 `requests AuthorizedSession` + 直接 REST POST。同步按钮整合进企业库页（去独立 `/gmail` 页，旧 URL 跳转企业库），卡片显示 已同步/未同步，顶部 gmail-bar 加「去邮箱」入口。
   - **联系人分组「由skill同步的企业」+ 409 修复**：所有由 skill 同步的 Gmail 联系人自动归入分组「由skill同步的企业」（`get_or_create_group` + `add_contacts_to_group`，`sync_all`/`sync_company` 同步后自动归组）。踩坑：`members:modify` 对「已在分组的成员」重复添加返回 **409** 导致整批失败——这就是「后续同步的企业没自动到分组」的根因（`add_contacts_to_group` 没过滤已存在成员，一次失败整批 abort）。修复：捕获 409 降级逐个添加、跳过已存在的（幂等可重试）。批量归组历史已同步：`python scripts/gmail_sync.py group`。当前对齐：分组 memberCount 321 = DB synced 有 resourceName 321 条（另有 5 条 synced 无 resourceName、63 条 pending 待后续）。
+  - **联系人分组拆成 skill1~N（每组≤50 + 批次隔离）**：原「由skill同步的企业」单一总组拆成 skill1~skill8（每组最多50、不同同步批次不混组）。历史 334 条按 synced_at 切 2 批次（20:37~20:50 共 153 条、21:13~21:28 共 181 条）→ skill1(50)/skill2(50)/skill3(50)/skill4(3)/skill5(50)/skill6(50)/skill7(50)/skill8(31)，删除原总组。后续同步：`sync_all`/`sync_company` 改「新批次从最大 skill 编号+1 起、满50换组」自动归组。CLI 新增 `skill` 命令（历史拆组，一次性）。踩坑：执行时 token 过期 + 代理 127.0.0.1:33210 对 Google 全超时（20s），切节点恢复后跑通。
 - **2026-09-05**
   - **波兰获客全流程首跑（真实数据，355 条）**：search_leads(50) → fetch_enf(100) → fetch_gmaps 6 城市(274) → merge(355) → backfill(355) → score → 三段式入库。结果：新增 353、差异 2、重复 0，卖 Deye 35 家。暴露 5 个问题（已修 3、修中 1、待人工 1）：
     - ✅ **fetch_gmaps 广告 URL 未清洗**：Google Maps 广告位 website 是 `/aclk?...` 跳转（真实网址在 `adurl` 参数，无 adurl 即纯广告脏数据）。ARSEM 被抓成 `/aclk?sa=L&...` 入库。修 `extract_real_url`：`/aclk?` 解析 adurl，无 adurl 返回 "" 丢弃。
@@ -63,8 +64,8 @@
 - **⚠️ 关键坑**：googleapiclient 默认 httplib2 0.32 对 HTTP 代理的 https 隧道有 bug → 直连/代理都 `WinError 10060` 超时。已改 `google.auth.transport.requests.AuthorizedSession` + 直接 REST POST（`gmail_sync.py::build_people/add_contact`），requests 读环境变量代理、httplib2 不读
 - **安全铁律**（`references/compliance-rules.md`）：只加联系人+备注，绝不自动发邮件；备注格式 `{国家} {main_id} {企业名} #{n}`
 - **同步机制**：`queue_gmail_contacts` 把「有邮箱」企业标 pending → `sync_all` 逐条 `createContact` → `mark_gmail_contact` UPSERT（synced/failed）。幂等可重试：synced 跳过，failed/pending 下次点按钮续
-- **联系人分组**：同步成功即自动归入分组「由skill同步的企业」（`contactGroups/21737af38ba55483`）。⚠️ `members:modify` 重复添加已存在成员会 409，`add_contacts_to_group` 已处理（409 降级逐个、跳过已存在）
-- **CLI**：`python scripts/gmail_sync.py authorize|status|sync [main_id] [--dry-run]|group`（`group` = 批量把历史 synced 归组，幂等）
+- **联系人分组**：同步成功按「批次 + 每组≤50」自动归入 skill1~skillN（满50换组、新批次从新组开始，不混批次）。历史 334 条已拆成 skill1~8。⚠️ `members:modify` 重复添加已存在成员会 409，`add_contacts_to_group` 已处理（409 降级逐个、跳过已存在）
+- **CLI**：`python scripts/gmail_sync.py authorize|status|sync [main_id] [--dry-run]|skill`（`skill` = 历史 synced 按批次拆组，一次性）
 - **UI**：`/companies` 企业库页顶部 gmail-bar（同步按钮 + 去邮箱入口），卡片显示 已同步/未同步
 
 ## 长期完善方向（技术债 + 迭代项）
