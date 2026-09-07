@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}无邮箱异常{% endblock %}
+{% block content %}
+<h1>无邮箱异常记录</h1>
+<p class="hint">邮箱是联系底线。获客时没拿到某企业邮箱 → 划入异常并分析原因。补到邮箱后人工「关闭」。</p>
+
+{% if request.args.get('msg') %}
+<p class="hint" style="color:#16a34a;">{{ request.args.get('msg') }}</p>
+{% endif %}
+
+<div class="row">
+  <form method="post" action="{{ url_for('email_anomalies_scan') }}" class="inline">
+    <button class="primary">扫描全部无邮箱企业 → 划入异常</button>
+  </form>
+  <span style="align-self:center;">
+    <a href="{{ url_for('email_anomalies', status='open') }}" class="btn" style="{{ 'opacity:.5;' if status != 'open' }}">待处理</a>
+    <a href="{{ url_for('email_anomalies', status='resolved') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);{{ 'opacity:.5;' if status != 'resolved' }}">已解决</a>
+    <a href="{{ url_for('email_anomalies', status='') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);">全部</a>
+  </span>
+</div>
+
+<h2>异常清单（{{ anomalies | length }}）</h2>
+{% if anomalies %}
+<table>
+  <thead><tr><th>企业</th><th>国家</th><th style="width:320px;">原因分析</th><th>电话</th><th>官网</th><th style="width:90px;">状态</th><th style="width:90px;">操作</th></tr></thead>
+  <tbody>
+  {% for a in anomalies %}
+    <tr>
+      <td><a href="{{ url_for('company_detail', main_id=a.main_id) }}">{{ a.company_name or a.main_id }}</a></td>
+      <td>{{ a.country or '' }}</td>
+      <td>{{ a.reason or '' }}</td>
+      <td>{{ a.phone or '' }}</td>
+      <td>{% if a.website %}<a href="{{ a.website }}" target="_blank">官网</a>{% endif %}</td>
+      <td>{{ '待处理' if a.status == 'open' else '已解决' }}</td>
+      <td>{% if a.status == 'open' %}<form method="post" action="{{ url_for('email_anomalies_resolve', anomaly_id=a.id) }}" class="inline"><button class="muted">关闭</button></form>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">暂无异常记录。点上面「扫描」把无邮箱企业划入异常。</p>
+{% endif %}
+{% endblock %}

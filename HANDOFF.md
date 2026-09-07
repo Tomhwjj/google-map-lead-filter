@@ -16,6 +16,9 @@
 
 ## 改动记录（按日倒序）
 
+- **2026-09-07**
+  - **数据清洗**：删 25 家噪声企业（JUNK_HOSTS，JSON 导出 + DB 备份）→ 378 家；清 4 家垃圾邮箱（20 条）；修 26 家标题污染企业名（NAME_FIX）。脚本 `scripts/clean_data.py`（--dry-run 预览）。
+  - **企业邮箱(Gmail)集成 + UI 整合**：绑定 `hsh@wccsolar.es`，OAuth 授权完成（refresh token 落 `data/gmail_token.json`）。踩坑：googleapiclient 默认 httplib2 对 HTTP 代理 https 隧道有 bug（WinError 10060），改 `requests AuthorizedSession` + 直接 REST POST。同步按钮整合进企业库页（去独立 `/gmail` 页，旧 URL 跳转企业库），卡片显示 已同步/未同步，顶部 gmail-bar 加「去邮箱」入口。
 - **2026-09-05**
   - **波兰获客全流程首跑（真实数据，355 条）**：search_leads(50) → fetch_enf(100) → fetch_gmaps 6 城市(274) → merge(355) → backfill(355) → score → 三段式入库。结果：新增 353、差异 2、重复 0，卖 Deye 35 家。暴露 5 个问题（已修 3、修中 1、待人工 1）：
     - ✅ **fetch_gmaps 广告 URL 未清洗**：Google Maps 广告位 website 是 `/aclk?...` 跳转（真实网址在 `adurl` 参数，无 adurl 即纯广告脏数据）。ARSEM 被抓成 `/aclk?sa=L&...` 入库。修 `extract_real_url`：`/aclk?` 解析 adurl，无 adurl 返回 "" 丢弃。
@@ -47,6 +50,20 @@
   - 提取 ENF Solar 抓取脚本 `scripts/fetch_enf.py`（seller→distributor、邮箱 JS 解码、429 退避、欧盟 27 国 + 乌克兰）
   - 修品牌关键词 substring 误命中（INGE / Fusion / OHm）：backfill.py + score_leads.py 改词边界匹配，教训见 `references/brand-mapping.md`
   - 市场边界确认：欧盟 27 国 + 乌克兰
+
+## 企业邮箱(Gmail)集成配置（2026-09-07 固化）
+
+> `data/` 被 gitignore，账号/凭证/token 不入 git，此处留档防丢。
+
+- **绑定账号**：`hsh@wccsolar.es`（Google Workspace，active）——存 `email_accounts` 表
+- **OAuth 凭证**：`data/credentials.json`（桌面应用 installed 类型，redirect `http://localhost`）
+- **token**：`data/gmail_token.json`（含 refresh_token，自动续期保持登录态）
+- **Google 访问代理**：`127.0.0.1:33210`（与 git 同一代理，Google 被墙）。`gmail_sync.py` 模块顶部把 `HTTPS_PROXY/HTTP_PROXY` setdefault 成该代理
+- **⚠️ 关键坑**：googleapiclient 默认 httplib2 0.32 对 HTTP 代理的 https 隧道有 bug → 直连/代理都 `WinError 10060` 超时。已改 `google.auth.transport.requests.AuthorizedSession` + 直接 REST POST（`gmail_sync.py::build_people/add_contact`），requests 读环境变量代理、httplib2 不读
+- **安全铁律**（`references/compliance-rules.md`）：只加联系人+备注，绝不自动发邮件；备注格式 `{国家} {main_id} {企业名} #{n}`
+- **同步机制**：`queue_gmail_contacts` 把「有邮箱」企业标 pending → `sync_all` 逐条 `createContact` → `mark_gmail_contact` UPSERT（synced/failed）。幂等可重试：synced 跳过，failed/pending 下次点按钮续
+- **CLI**：`python scripts/gmail_sync.py authorize|status|sync [main_id] [--dry-run]`
+- **UI**：`/companies` 企业库页顶部 gmail-bar（同步按钮 + 去邮箱入口），卡片显示 已同步/未同步
 
 ## 长期完善方向（技术债 + 迭代项）
 

@@ -4,6 +4,33 @@
 {% block content %}
 <h1>企业库</h1>
 
+{% if msg %}<p class="hint" style="color:#16a34a;">{{ msg }}</p>{% endif %}
+<div class="gmail-bar">
+  <div class="gmail-bar-info">
+    <span>企业邮箱</span>
+    <b>{{ account.account_email if account else '未绑定' }}</b>
+    {% if creds_valid %}<span class="tag ok">已授权</span>{% else %}<span class="tag bad">未授权</span>{% endif %}
+    <span class="sep">·</span>
+    <span>待同步 <b>{{ sync_stats.pending }}</b></span>
+    <span>已同步 <b>{{ sync_stats.synced }}</b></span>
+    <span>失败 <b>{{ sync_stats.failed }}</b></span>
+  </div>
+  <div class="gmail-bar-actions">
+    {% if bg.sync_running %}
+    <span class="hint" style="color:#d97706;">{{ bg.sync_msg }}</span>
+    {% elif creds_valid %}
+    <form method="post" action="{{ url_for('gmail_sync') }}" class="inline">
+      <button class="ok" {% if sync_stats.pending == 0 %}disabled{% endif %}>同步全部有邮箱企业 → 企业邮箱</button>
+    </form>
+    {% else %}
+    <form method="post" action="{{ url_for('gmail_authorize') }}" class="inline">
+      <button class="primary">授权企业邮箱</button>
+    </form>
+    {% endif %}
+    <a class="open-mail" href="https://mail.google.com/mail/u/0/#inbox" target="_blank" rel="noopener">去邮箱 ↗</a>
+  </div>
+</div>
+
 <form method="get" class="form row-form">
   <input type="text" name="q" value="{{ q }}" placeholder="企业名 / 电话 / 域名 / 邮箱">
   <select name="country">
@@ -19,12 +46,17 @@
     <option value="yes" {{ 'selected' if deye == 'yes' }}>卖 Deye</option>
     <option value="no" {{ 'selected' if deye == 'no' }}>不卖 Deye</option>
   </select>
+  <select name="has_email">
+    <option value="">是否有邮箱：全部</option>
+    <option value="yes" {{ 'selected' if has_email == 'yes' }}>有邮箱</option>
+    <option value="no" {{ 'selected' if has_email == 'no' }}>无邮箱（联系底线缺失）</option>
+  </select>
   <button type="submit">搜索</button>
-  {% if q or pool or country or deye %}<a href="{{ url_for('companies') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);">清空</a>{% endif %}
+  {% if q or pool or country or deye or has_email %}<a href="{{ url_for('companies') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);">清空</a>{% endif %}
 </form>
 
 {% if items %}
-<p class="hint">共 {{ items | length }} 条 · 头部/长尾双模式可切换，分数按当前模式重算</p>
-{{ cards_block(items, pools, url_for('companies', q=q, pool=pool, country=country, deye=deye)) }}
+<p class="hint">共 {{ items | length }} 条 · 头部/长尾双模式可切换，分数按当前模式重算 · 📧=邮箱个数 · ⚠️无邮箱=联系底线缺失</p>
+{{ cards_block(items, pools, url_for('companies', q=q, pool=pool, country=country, deye=deye, has_email=has_email)) }}
 {% else %}<p class="empty">无匹配企业。</p>{% endif %}
 {% endblock %}

@@ -147,6 +147,11 @@
 .leads .chip:hover { background: #f8fafc; }
 .leads .chip.phone { background: #eff6ff; border-color: #bfdbfe; font-weight: 600; }
 .leads .chip.wa { background: #dcfce7; border-color: #86efac; color: #16a34a; font-weight: 600; }
+.leads .chip.email-count { background: #f0fdf4; border-color: #bbf7d0; color: #15803d; font-weight: 700; }
+.leads .chip.no-email { background: #fef2f2; border-color: #fecaca; color: #b91c1c; font-weight: 700; }
+.leads .chip.gmail-synced { background: #dcfce7; border-color: #86efac; color: #15803d; font-weight: 700; }
+.leads .chip.gmail-pending { background: #fef3c7; border-color: #fde68a; color: #b45309; font-weight: 700; }
+.leads .chip.muted { color: var(--muted); background: #f8fafc; }
 
 .leads .detail {
   border-top: 1px dashed var(--line);

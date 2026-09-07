@@ -34,21 +34,31 @@ SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
 from core import (RESEARCH_DIMS, build_report, change_pool, finish_research,
-                  get_company, get_country_detail, get_research,
-                  latest_research_ranking, list_companies, list_countries,
-                  list_diff_groups, list_pool_log, list_research, list_task_issues,
-                  list_tasks, pool_stats, review_diff, save_country_score,
-                  start_research, start_task)
+                  get_company, get_country_detail, get_research, get_email_account,
+                  gmail_sync_stats, latest_research_ranking, list_companies,
+                  list_countries, list_diff_groups, list_email_anomalies,
+                  list_gmail_contacts, list_pool_log, list_research,
+                  list_task_issues, list_tasks, pool_stats, resolve_email_anomaly,
+                  review_diff, save_country_score, save_email_account,
+                  scan_no_email_anomalies, start_research, start_task)
 from db import POOLS, get_conn, init_db
 from render_task_report import render_md, render_report
 from render_research_report import (render_md as render_research_md,
                                     render_report as render_research_report)
 
+# 企业邮箱(Gmail)集成（google 库延迟导入，未装/未授权不阻塞数据层）
+import gmail_sync as gmail
+
 PORT = 8766
+
+# 后台 OAuth 授权 / 联系人同步状态（简单内存态，供页面刷新展示进度）
+_BG = {"auth_running": False, "auth_msg": "", "sync_running": False, "sync_msg": ""}
 
 app = Flask(__name__,
             template_folder=os.path.join(APP_DIR, "templates"),
             static_folder=os.path.join(APP_DIR, "static"))
+# 改模板/静态文件后刷新页面即生效，无需重启 Flask（避免重启打断后台同步线程）
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 
 def _parse_deye(deye):
@@ -57,6 +67,16 @@ def _parse_deye(deye):
     if deye == "yes":
         return True
     if deye == "no":
+        return False
+    return None
+
+
+def _parse_has_email(has_email):
+    """把「是否有邮箱」下拉值转成 list_companies 的 has_email 参数（None/True/False）。"""
+    has_email = (has_email or "").strip().lower()
+    if has_email == "yes":
+        return True
+    if has_email == "no":
         return False
     return None
 
@@ -125,12 +145,21 @@ def companies():
     pool = request.args.get("pool", "").strip()
     country = request.args.get("country", "").strip()
     deye = request.args.get("deye", "").strip()
+    has_email = request.args.get("has_email", "").strip()
+    msg = request.args.get("msg", "").strip()
     sells_deye = _parse_deye(deye)
     items = list_companies(query=q, pool=pool or None, country=country or None,
-                           sells_deye=sells_deye)
+                           sells_deye=sells_deye, has_email=_parse_has_email(has_email))
     countries = list_countries()
+    account = get_email_account()
+    creds = gmail.get_credentials()
+    creds_valid = bool(creds and creds.valid)
+    sync_stats = gmail_sync_stats()
     return render_template("companies.html", items=items, q=q, pool=pool,
-                           country=country, deye=deye, pools=POOLS, countries=countries)
+                           country=country, deye=deye, has_email=has_email,
+                           pools=POOLS, countries=countries, msg=msg,
+                           account=account, creds_valid=creds_valid,
+                           sync_stats=sync_stats, bg=_BG)
 
 
 @app.route("/pool", methods=["GET"])
@@ -139,16 +168,19 @@ def pool():
     country = request.args.get("country", "").strip() or None
     q = request.args.get("q", "").strip()
     deye = request.args.get("deye", "").strip()
+    has_email = request.args.get("has_email", "").strip()
     sells_deye = _parse_deye(deye)
     stats = pool_stats()
     countries = list_countries()
-    has_filter = bool(pool_filter or country or q or sells_deye is not None)
+    has_filter = bool(pool_filter or country or q or sells_deye is not None
+                      or has_email)
     items = list_companies(query=q, pool=pool_filter, country=country,
-                           sells_deye=sells_deye) if has_filter else []
+                           sells_deye=sells_deye,
+                           has_email=_parse_has_email(has_email)) if has_filter else []
     logs = list_pool_log(limit=50) if not has_filter else []
     return render_template("pool.html", stats=stats, pool=pool_filter, pools=POOLS,
                            items=items, logs=logs, country=country, countries=countries,
-                           has_filter=has_filter, q=q, deye=deye)
+                           has_filter=has_filter, q=q, deye=deye, has_email=has_email)
 
 
 @app.route("/companies/<main_id>", methods=["GET"])
@@ -168,7 +200,9 @@ def company_detail(main_id):
             except Exception:
                 pass
     return render_template("company_detail.html", company=company,
-                           logs=data["pool_log"], diffs=data["diffs"], pools=POOLS)
+                           logs=data["pool_log"], diffs=data["diffs"], pools=POOLS,
+                           gmail_contacts=data["gmail_contacts"],
+                           email_anomalies=data["email_anomalies"])
 
 
 @app.route("/companies/<main_id>/pool", methods=["POST"])
@@ -182,6 +216,96 @@ def company_change_pool(main_id):
     except ValueError as e:
         return render_template("error.html", msg=str(e)), 400
     return redirect(next_url)
+
+
+# ---------------------------------------------------------------------------
+# 企业邮箱（Gmail/Workspace）集成 + 无邮箱异常记录
+# ---------------------------------------------------------------------------
+
+@app.route("/gmail", methods=["GET"])
+def gmail_page():
+    # 企业邮箱功能已整合进企业库页，旧 URL 重定向过去
+    return redirect(url_for("companies"))
+
+
+@app.route("/gmail/bind", methods=["POST"])
+def gmail_bind():
+    account_email = (request.form.get("account_email") or "").strip()
+    if not account_email or "@" not in account_email:
+        return render_template("error.html", msg="请填写有效企业邮箱账号"), 400
+    account_type = "workspace" if "@gmail.com" not in account_email.lower() else "gmail"
+    save_email_account(account_email, account_type=account_type)
+    return redirect(url_for("companies", msg=f"已绑定账号 {account_email}"))
+
+
+@app.route("/gmail/authorize", methods=["POST"])
+def gmail_authorize():
+    """后台线程跑 OAuth 授权（浏览器弹出授权页，用户完成后 token 自动落盘）。"""
+    account_email = (request.form.get("account_email") or "").strip()
+    if _BG["auth_running"]:
+        return redirect(url_for("companies", msg="授权进行中，请在弹出的浏览器完成"))
+    _BG["auth_running"] = True
+    _BG["auth_msg"] = "授权中，请在浏览器完成登录…"
+
+    def _run():
+        try:
+            gmail.authorize()
+            if account_email:
+                account_type = "workspace" if "@gmail.com" not in account_email.lower() else "gmail"
+                save_email_account(account_email, account_type=account_type)
+            _BG["auth_msg"] = "授权成功，登录态已保持"
+        except Exception as e:
+            _BG["auth_msg"] = f"授权失败：{e}"
+        finally:
+            _BG["auth_running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return redirect(url_for("companies", msg="已启动授权，请在弹出的浏览器完成 Google 登录"))
+
+
+@app.route("/gmail/sync", methods=["POST"])
+def gmail_sync():
+    """后台线程把「有邮箱」企业自动加进企业邮箱联系人。"""
+    if _BG["sync_running"]:
+        return redirect(url_for("companies", msg="同步进行中…"))
+    creds = gmail.get_credentials()
+    if not (creds and creds.valid):
+        return redirect(url_for("companies", msg="尚未授权，请先「授权企业邮箱」"))
+    _BG["sync_running"] = True
+    _BG["sync_msg"] = "同步中…"
+
+    def _run():
+        try:
+            service = gmail.build_people(creds)
+            result = gmail.sync_all(service)
+            _BG["sync_msg"] = f"同步完成：新增 {result['added']} · 跳过 {result['skipped']} · 失败 {result['failed']}"
+        except Exception as e:
+            _BG["sync_msg"] = f"同步失败：{e}"
+        finally:
+            _BG["sync_running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return redirect(url_for("companies", msg="已启动联系人同步，稍后刷新查看进度"))
+
+
+@app.route("/email-anomalies", methods=["GET"])
+def email_anomalies():
+    status = request.args.get("status", "open")
+    anomalies = list_email_anomalies(status=status or None)
+    return render_template("email_anomalies.html", anomalies=anomalies, status=status)
+
+
+@app.route("/email-anomalies/scan", methods=["POST"])
+def email_anomalies_scan():
+    result = scan_no_email_anomalies()
+    return redirect(url_for("email_anomalies",
+                            msg=f"扫描完成：无邮箱 {result['scanned']} 家，新划异常 {result['new']} 家"))
+
+
+@app.route("/email-anomalies/<int:anomaly_id>/resolve", methods=["POST"])
+def email_anomalies_resolve(anomaly_id):
+    resolve_email_anomaly(anomaly_id, resolved=True)
+    return redirect(url_for("email_anomalies"))
 
 
 @app.route("/research", methods=["GET"])

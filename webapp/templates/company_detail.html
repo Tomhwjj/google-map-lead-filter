@@ -78,7 +78,13 @@
     <tr><th style="width:140px;">国家/城市</th><td>{{ company.country or '' }}{{ ' / ' if company.city }}{{ company.city or '' }}</td></tr>
     <tr><th>客户类型</th><td>{{ company.customer_type or '' }}</td></tr>
     <tr><th>电话</th><td>{{ company.phone or '' }}</td></tr>
-    <tr><th>邮箱</th><td>{{ company.email or '' }}</td></tr>
+    <tr><th>邮箱</th><td>
+      {% if company.email_count %}
+        <b>{{ company.email_count }}</b> 个邮箱
+      {% else %}
+        <span style="color:#b91c1c;font-weight:700;">⚠️ 无邮箱（联系底线缺失）</span>
+      {% endif %}
+    </td></tr>
     <tr><th>官网</th><td>{% if company.website %}<a href="{{ company.website }}" target="_blank">{{ company.website }}</a>{% endif %}</td></tr>
     <tr><th>LinkedIn</th><td>{% if company.linkedin %}<a href="{{ company.linkedin }}" target="_blank">{{ company.linkedin }}</a>{% endif %}</td></tr>
     <tr><th>Facebook</th><td>{{ company.facebook or '' }}</td></tr>
@@ -89,6 +95,28 @@
   </tbody>
 </table>
 
+<h2>邮箱明细与联系人同步</h2>
+{% if company.email_list %}
+<p class="hint">每个邮箱对应一个企业邮箱联系人，备注 = 国家 + 企业主码 + 企业名 + #n（第 n 个邮箱）。</p>
+<table>
+  <thead><tr><th style="width:40px;">#</th><th>邮箱</th><th>备注（同步到企业邮箱）</th><th style="width:120px;">同步状态</th></tr></thead>
+  <tbody>
+  {% for e in company.email_list %}
+    {% set gc = gmail_contacts | selectattr('email', 'equalto', e) | list %}
+    {% set synced = gc | selectattr('status', 'equalto', 'synced') | list %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td><a href="mailto:{{ e }}">{{ e }}</a></td>
+      <td><code>{{ company.country }} {{ company.main_id }} {{ company.company_name }} #{{ loop.index }}</code></td>
+      <td>{% if synced %}<span style="color:#16a34a;font-weight:700;">✓ 已加</span>{% elif gc %}<span style="color:#d97706;">待同步/失败</span>{% else %}<span style="color:#6b7280;">未同步</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty" style="color:#b91c1c;">⚠️ 此企业未查到邮箱。邮箱是联系底线，已划入<a href="{{ url_for('email_anomalies') }}">无邮箱异常</a>。</p>
+{% endif %}
+
 <h2>评分与背调</h2>
 <table>
   <tbody>
@@ -97,9 +125,10 @@
     <tr><th>卖 Deye</th><td>{{ '✓ 是' if company.sells_deye else '否' }}</td></tr>
     <tr><th>品牌命中</th><td>{% if company.brands_found is iterable and company.brands_found is not string %}{{ company.brands_found | join(', ') }}{% else %}{{ company.brands_found or '' }}{% endif %}</td></tr>
     <tr><th>产品档</th><td>{{ company.product_tier or '' }}</td></tr>
-    <tr><th>规模档</th><td>{{ company.scale_tier or '' }}{{ '（估）' if company.scale_estimated else '' }}</td></tr>
+    <tr><th>规模档</th><td>{{ {'large':'大型','mid':'中型','small':'小型','unconfirmed':'未确认'}.get(company.scale_tier, company.scale_tier or '未确认') }}{{ '（估）' if company.scale_estimated else '' }}</td></tr>
+    <tr><th>规模判断依据</th><td>{{ company.scale_basis or '未背调，规模未确认（按小型档中性分）' }}</td></tr>
     <tr><th>背调</th><td>{{ '已完成' if company.backfilled else '未背调' }}</td></tr>
-    <tr><th>淘汰/备注</th><td>{{ company.reason or '' }}</td></tr>
+    <tr><th>开发理由</th><td>{{ company.reason or '' }}</td></tr>
   </tbody>
 </table>
 

@@ -57,7 +57,15 @@
     {%- if c.phone %}<a class="chip phone" href="tel:{{ c.phone }}">📞 {{ c.phone }}</a>{% endif %}
     {%- if c.wa_url %}<a class="chip wa" href="{{ c.wa_url }}" target="_blank">WhatsApp</a>{% endif %}
     {%- if c.website %}<a class="chip site" href="{{ c.website }}" target="_blank">官网</a>{% endif %}
-    {%- if c.email %}<a class="chip" href="mailto:{{ c.email }}">{{ c.email }}</a>{% endif %}
+    {%- if c.email_count %}
+    <span class="chip email-count">📧 {{ c.email_count }} 邮箱</span>
+      {%- for e in c.email_list[:3] %}<a class="chip" href="mailto:{{ e }}" title="{{ e }}">{{ e }}</a>{% endfor %}
+      {%- if c.email_count > 3 %}<span class="chip muted">+{{ c.email_count - 3 }}</span>{% endif %}
+      {%- if c.gmail_synced %}<span class="chip gmail-synced" title="已加进企业邮箱联系人">✓ 已同步</span>
+      {%- else %}<span class="chip gmail-pending" title="尚未加进企业邮箱联系人">未同步</span>{% endif %}
+    {%- else %}
+    <span class="chip no-email" title="邮箱是联系底线，此企业未查到邮箱">⚠️ 无邮箱</span>
+    {%- endif %}
     {%- if c.linkedin %}<a class="chip" href="{{ c.linkedin }}" target="_blank">LinkedIn</a>{% endif %}
     {%- if c.google_maps_url %}<a class="chip" href="{{ c.google_maps_url }}" target="_blank">Google Maps</a>{% endif %}
   </div>

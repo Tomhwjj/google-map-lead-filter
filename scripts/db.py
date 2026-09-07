@@ -3,15 +3,18 @@
 """
 数据层：SQLite 企业库（本地私有化获客系统的持久化底座）。
 
-8 张表：
-  companies      — 企业主表（main_id 主键，全字段 + 客户池 pool + 时间戳轨迹）
-  tasks          — 获客任务表（task_id 主键，起止时间戳 / 时长 / 关键词快照 / 数据源清单）
-  task_companies — 任务 ↔ 企业关联（task_id + main_id，action: new/dup/diff）
-  diffs          — 差异待核验队列（新旧值冲突，status pending/approved/rejected，人工审核）
-  pool_log       — 客户池状态轨迹（main_id + from/to + 时间戳 + 操作人 + 备注）
-  market_tasks   — 市调任务表（mr_id 主键，覆盖国家 / 执行人 / 时间戳 / 缓存 7 天过期）
-  country_scores — 各国热度得分（mr_id + country，0-100 分 + 利好利空 / 风险 / 来源快照）
-  task_issues    — 获客问题记录（task_id 关联任务，分类/标题/详情/方案，供迭代复盘）
+11 张表：
+  companies       — 企业主表（main_id 主键，全字段 + 客户池 pool + 时间戳轨迹）
+  tasks           — 获客任务表（task_id 主键，起止时间戳 / 时长 / 关键词快照 / 数据源清单）
+  task_companies  — 任务 ↔ 企业关联（task_id + main_id，action: new/dup/diff）
+  diffs           — 差异待核验队列（新旧值冲突，status pending/approved/rejected，人工审核）
+  pool_log        — 客户池状态轨迹（main_id + from/to + 时间戳 + 操作人 + 备注）
+  market_tasks    — 市调任务表（mr_id 主键，覆盖国家 / 执行人 / 时间戳 / 缓存 7 天过期）
+  country_scores  — 各国热度得分（mr_id + country，0-100 分 + 利好利空 / 风险 / 来源快照）
+  task_issues     — 获客问题记录（task_id 关联任务，分类/标题/详情/方案，供迭代复盘）
+  email_accounts  — 绑定企业邮箱账号（Gmail/Workspace，OAuth token 存 data/gmail_token.json）
+  gmail_contacts  — 企业邮箱 → Google 联系人同步轨迹（备注=国家+主码+企业名+n）
+  email_anomalies — 无邮箱异常记录（获客没拿到邮箱 → 划入异常 + 分析原因）
 
 被 core.py / webapp 共用；也可直接跑初始化：
     python db.py                 # 用默认库路径初始化
@@ -36,9 +39,10 @@ from urllib.parse import urlparse
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DB = os.path.join(PROJECT_ROOT, "data", "leads.db")
 
-# 客户池五分类（架构文档固定，默认落「潜在客户(未联系)」）
+# 客户池六分类（架构文档五分类 + 新增「已用邮箱尝试联系」，默认落「潜在客户(未联系)」）
 DEFAULT_POOL = "潜在客户(未联系)"
-POOLS = ["潜在客户(未联系)", "潜在客户(已取得联系)", "重点关注客户", "黑名单客户", "老客户"]
+POOLS = ["潜在客户(未联系)", "潜在客户(已取得联系)", "已用邮箱尝试联系",
+         "重点关注客户", "黑名单客户", "老客户"]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS companies (
@@ -63,6 +67,7 @@ CREATE TABLE IF NOT EXISTS companies (
     brands_context  TEXT,
     product_tier    TEXT,
     scale_tier      TEXT,
+    scale_basis     TEXT,
     scale_estimated INTEGER DEFAULT 0,
     backfilled      INTEGER DEFAULT 0,
     reason          TEXT,
@@ -175,6 +180,50 @@ CREATE TABLE IF NOT EXISTS task_issues (
 );
 
 CREATE INDEX IF NOT EXISTS idx_task_issues_task ON task_issues(task_id);
+
+-- 绑定企业邮箱账号（Gmail/Workspace），OAuth token 另存 data/gmail_token.json
+CREATE TABLE IF NOT EXISTS email_accounts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_email TEXT UNIQUE,
+    account_type  TEXT,                -- workspace / gmail
+    status        TEXT DEFAULT 'active',  -- active / disabled
+    bound_at      TEXT,
+    last_sync_at  TEXT,
+    updated_at    TEXT
+);
+
+-- 企业邮箱 → Google 联系人同步轨迹（每个邮箱一条，备注=国家+主码+企业名+n）
+CREATE TABLE IF NOT EXISTS gmail_contacts (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    main_id                TEXT,
+    email                  TEXT,
+    note                   TEXT,          -- 备注：{国家} {主码} {企业名} #{n}
+    contact_resource_name  TEXT,          -- people/{id}
+    status                 TEXT DEFAULT 'pending',  -- pending / synced / failed
+    error                  TEXT,
+    synced_at              TEXT,
+    created_at             TEXT,
+    UNIQUE(main_id, email)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gmail_contacts_main ON gmail_contacts(main_id);
+CREATE INDEX IF NOT EXISTS idx_gmail_contacts_status ON gmail_contacts(status);
+
+-- 无邮箱异常记录：获客时没拿到邮箱 → 划入异常 + 分析原因（人工/启发式）
+CREATE TABLE IF NOT EXISTS email_anomalies (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    main_id      TEXT,
+    task_id      TEXT,
+    company_name TEXT,
+    country      TEXT,
+    reason       TEXT,          -- 分析原因
+    status       TEXT DEFAULT 'open',  -- open / resolved
+    created_at   TEXT,
+    resolved_at  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_anomalies_main ON email_anomalies(main_id);
+CREATE INDEX IF NOT EXISTS idx_email_anomalies_status ON email_anomalies(status);
 """
 
 
@@ -195,6 +244,10 @@ def init_db(db_path=None):
     cols = [r[1] for r in conn.execute("PRAGMA table_info(country_scores)")]
     if "dimensions" not in cols:
         conn.execute("ALTER TABLE country_scores ADD COLUMN dimensions TEXT")
+    # 老库迁移：companies 补 scale_basis 列（规模判档详细依据）
+    ccols = [r[1] for r in conn.execute("PRAGMA table_info(companies)")]
+    if "scale_basis" not in ccols:
+        conn.execute("ALTER TABLE companies ADD COLUMN scale_basis TEXT")
     conn.commit()
     return conn
 

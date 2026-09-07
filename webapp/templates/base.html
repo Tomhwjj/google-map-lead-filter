@@ -15,6 +15,7 @@
     <a href="{{ url_for('diffs') }}" class="{{ 'active' if request.endpoint == 'diffs' }}">差异审核</a>
     <a href="{{ url_for('pool') }}" class="{{ 'active' if request.endpoint == 'pool' }}">客户池</a>
     <a href="{{ url_for('companies') }}" class="{{ 'active' if request.endpoint == 'companies' }}">企业库</a>
+    <a href="{{ url_for('email_anomalies') }}" class="{{ 'active' if request.endpoint == 'email_anomalies' }}">邮箱异常</a>
   </nav>
   <main class="main">
     {% block content %}{% endblock %}

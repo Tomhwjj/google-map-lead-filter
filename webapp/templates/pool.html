@@ -30,14 +30,19 @@
     <option value="yes" {{ 'selected' if deye == 'yes' }}>卖 Deye</option>
     <option value="no" {{ 'selected' if deye == 'no' }}>不卖 Deye</option>
   </select>
+  <select name="has_email">
+    <option value="">是否有邮箱：全部</option>
+    <option value="yes" {{ 'selected' if has_email == 'yes' }}>有邮箱</option>
+    <option value="no" {{ 'selected' if has_email == 'no' }}>无邮箱（联系底线缺失）</option>
+  </select>
   <button type="submit">筛选</button>
   {% if has_filter %}<a href="{{ url_for('pool') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);">清空</a>{% endif %}
 </form>
 
 {% if has_filter %}
-<h2>{{ pool or '全部池' }}{% if country %} · {{ country }}{% endif %}{% if q %} · 搜“{{ q }}”{% endif %}{% if deye %} · {{ '卖 Deye' if deye == 'yes' else '不卖 Deye' }}{% endif %}（{{ items | length }} 家）</h2>
+<h2>{{ pool or '全部池' }}{% if country %} · {{ country }}{% endif %}{% if q %} · 搜“{{ q }}”{% endif %}{% if deye %} · {{ '卖 Deye' if deye == 'yes' else '不卖 Deye' }}{% endif %}{% if has_email %} · {{ '有邮箱' if has_email == 'yes' else '无邮箱' }}{% endif %}（{{ items | length }} 家）</h2>
 {% if items %}
-{{ cards_block(items, pools, url_for('pool', pool=pool, country=country, q=q, deye=deye)) }}
+{{ cards_block(items, pools, url_for('pool', pool=pool, country=country, q=q, deye=deye, has_email=has_email)) }}
 {% else %}<p class="empty">该筛选下暂无企业。</p>{% endif %}
 {% else %}
 <h2>最近换池轨迹</h2>

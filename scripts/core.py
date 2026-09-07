@@ -205,6 +205,12 @@ def ingest_leads(leads, task_id, dry_run=False, db_path=None):
 
     if not dry_run:
         conn.commit()
+    # 新入库的「有邮箱」企业自动排队进企业邮箱联系人（等 gmail_sync.sync 推送）
+    if not dry_run and stats["new_main_ids"]:
+        try:
+            queue_gmail_contacts(stats["new_main_ids"], db_path=db_path)
+        except Exception:
+            pass  # 邮箱队列失败不影响主入库
     conn.close()
     return stats
 
@@ -264,11 +270,61 @@ CARD_COLS = ["main_id", "company_name", "country", "city", "customer_type", "pho
              "reason", "pool", "domain"]
 
 
-def list_companies(query="", pool=None, country=None, sells_deye=None, limit=None,
-                   db_path=None):
-    """企业库检索（电话/企业名/域名模糊匹配 + 国家/客户池/是否卖 Deye 筛选），返回卡片渲染所需完整字段。
+def split_emails(email):
+    """把逗号分隔的邮箱串拆成去重后的邮箱列表（保序，去空白，忽略大小写去重）。"""
+    if not email:
+        return []
+    seen = set()
+    out = []
+    for e in email.split(","):
+        e = (e or "").strip()
+        if e and e.lower() not in seen:
+            seen.add(e.lower())
+            out.append(e)
+    return out
 
-    sells_deye: None=全部 / True=仅卖 Deye / False=仅不卖 Deye。"""
+
+# 邮箱是联系底线，但这些是垃圾/占位/机器人，不能进企业邮箱联系人（同步时跳过）
+# 占位域名（网站构建器默认、错误追踪、示例域名）——精确匹配域名，避免误伤真实邮箱
+_JUNK_EMAIL_DOMAINS = {
+    "example.com", "example.org", "example.net", "example.edu",
+    "email.com", "email.pl", "email.net", "test.com",
+    "home.com", "company.com",                       # Wix 等构建器占位默认
+    "sentry.io", "sentry.wixpress.com", "sentry-next.wixpress.com",
+}
+# 前缀/子串提示（no-reply 机器人、PrestaShop 授权邮箱等）
+_JUNK_EMAIL_HINTS = ("no-reply", "noreply", "license@", "@2x", "@900")
+_JUNK_EMAIL_TLDS = {"png", "jpg", "jpeg", "webp", "svg", "gif", "bmp", "ico",
+                    "tiff", "css", "js", "pdf", "zip"}
+
+
+def is_syncable_email(email):
+    """判断邮箱是否值得同步到企业邮箱联系人（排除垃圾/占位/图片名/机器人）。"""
+    e = (email or "").strip().lower()
+    if not e or "@" not in e:
+        return False
+    local, _, domain = e.rpartition("@")
+    if domain in _JUNK_EMAIL_DOMAINS:
+        return False
+    if any(h in e for h in _JUNK_EMAIL_HINTS):
+        return False
+    tld = e.rsplit(".", 1)[-1]
+    if tld in _JUNK_EMAIL_TLDS:
+        return False
+    return True
+
+
+def contact_note(country, main_id, company_name, n):
+    """企业邮箱联系人备注格式：{国家} {企业主码} {企业名} #{n}（n = 该企业第 n 个邮箱）。"""
+    return f"{(country or 'XX').strip().upper()} {main_id} {company_name} #{n}"
+
+
+def list_companies(query="", pool=None, country=None, sells_deye=None, has_email=None,
+                   limit=None, db_path=None):
+    """企业库检索（电话/企业名/域名模糊匹配 + 国家/客户池/是否卖 Deye/是否有邮箱筛选）。
+
+    sells_deye: None=全部 / True=仅卖 Deye / False=仅不卖 Deye。
+    has_email:  None=全部 / True=仅有邮箱 / False=仅无邮箱（无邮箱=联系底线缺失，需特殊标记）。"""
     conn = init_db(db_path)
     sql = f"SELECT {', '.join(CARD_COLS)} FROM companies"
     conds, params = [], []
@@ -281,6 +337,10 @@ def list_companies(query="", pool=None, country=None, sells_deye=None, limit=Non
     if sells_deye is not None:
         conds.append("sells_deye=?")
         params.append(1 if sells_deye else 0)
+    if has_email is True:
+        conds.append("email IS NOT NULL AND email != ''")
+    elif has_email is False:
+        conds.append("(email IS NULL OR email = '')")
     if query:
         q = f"%{query}%"
         conds.append("(company_name LIKE ? OR phone LIKE ? OR domain LIKE ? OR email LIKE ?)")
@@ -292,7 +352,16 @@ def list_companies(query="", pool=None, country=None, sells_deye=None, limit=Non
         sql += " LIMIT ?"
         params.append(limit)
     rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+    # 批量取各企业的企业邮箱联系人同步状态（main_id -> (total, synced)）
+    gmap = {}
+    for g in conn.execute(
+        "SELECT main_id, COUNT(*) AS total, "
+        "SUM(CASE WHEN status='synced' THEN 1 ELSE 0 END) AS synced "
+        "FROM gmail_contacts GROUP BY main_id").fetchall():
+        gmap[g["main_id"]] = (g["total"], g["synced"] or 0)
     conn.close()
+
     for r in rows:
         r["brands_found"] = _parse_json(r.get("brands_found")) or []
         r["score_detail"] = _parse_json(r.get("score_detail")) or {}
@@ -300,6 +369,12 @@ def list_companies(query="", pool=None, country=None, sells_deye=None, limit=Non
         r["score_detail_lt"] = _parse_json(r.get("score_detail_lt")) or {}
         r["score_basis_lt"] = _parse_json(r.get("score_basis_lt")) or {}
         r["wa_url"] = wa_link(r.get("phone"), r.get("country"))
+        r["email_list"] = split_emails(r.get("email"))
+        r["email_count"] = len(r["email_list"])
+        total, synced = gmap.get(r["main_id"], (0, 0))
+        r["gmail_contacts_total"] = total
+        r["gmail_contacts_synced"] = synced
+        r["gmail_synced"] = synced > 0
     return rows
 
 
@@ -534,7 +609,7 @@ def pool_stats(db_path=None):
 
 
 def get_company(main_id, db_path=None):
-    """取单个企业详情 + 其客户池轨迹 + 差异明细（字段级 old→new）。"""
+    """取单个企业详情 + 其客户池轨迹 + 差异明细（字段级 old→new）+ 邮箱联系人同步轨迹。"""
     conn = init_db(db_path)
     c = conn.execute("SELECT * FROM companies WHERE main_id=?", (main_id,)).fetchone()
     if not c:
@@ -544,8 +619,16 @@ def get_company(main_id, db_path=None):
         "SELECT * FROM pool_log WHERE main_id=? ORDER BY changed_at DESC, id DESC",
         (main_id,)).fetchall()]
     diffs = list_company_diffs(main_id, db_path=db_path)
+    gmail_contacts = [dict(r) for r in conn.execute(
+        "SELECT * FROM gmail_contacts WHERE main_id=? ORDER BY id", (main_id,)).fetchall()]
+    anomalies = [dict(r) for r in conn.execute(
+        "SELECT * FROM email_anomalies WHERE main_id=? ORDER BY id DESC", (main_id,)).fetchall()]
     conn.close()
-    return {"company": dict(c), "pool_log": logs, "diffs": diffs}
+    company = dict(c)
+    company["email_list"] = split_emails(company.get("email"))
+    company["email_count"] = len(company["email_list"])
+    return {"company": company, "pool_log": logs, "diffs": diffs,
+            "gmail_contacts": gmail_contacts, "email_anomalies": anomalies}
 
 
 # ---------------------------------------------------------------------------
@@ -698,6 +781,247 @@ def latest_research_ranking(db_path=None):
     if not items:
         return None
     return get_research(items[0]["mr_id"], db_path=db_path)
+
+
+# ---------------------------------------------------------------------------
+# 邮箱底线模块：邮箱个数 / 无邮箱异常记录 / 企业邮箱(Gmail)联系人同步轨迹
+# 铁律：邮箱是联系企业的底线，没拿到邮箱的企业要划入异常记录并分析原因。
+#       自动加企业邮箱联系人 = 系统记录轨迹；是否发邮件仍 100% 人工确认。
+# ---------------------------------------------------------------------------
+
+def analyze_no_email_reason(company):
+    """分析某企业「没拿到邮箱」的原因（启发式起点，人工可覆写）。
+
+    判断依据优先级（详见异常记录 reason 字段）：
+      1. 无官网   → 连背调入口都没有，邮箱拿不到
+      2. 未背调   → backfilled=0，官网还没抓，邮箱尚未采集
+      3. 已背调   → backfilled=1，官网抓过了仍无邮箱 = 官网未公开（只有表单/电话）
+    """
+    website = (company.get("website") or "").strip()
+    backfilled = company.get("backfilled")
+    phone = (company.get("phone") or "").strip()
+    if not website:
+        return "无官网，无法采集邮箱（仅 Google Maps 条目）"
+    if not backfilled:
+        return "未背调，邮箱尚未采集（需背调官网 contact 页）"
+    if phone:
+        return "已背调但未提取到邮箱（官网可能只公开电话/表单）"
+    return "已背调但未提取到邮箱（官网可能未公开邮箱）"
+
+
+def scan_no_email_anomalies(task_id=None, db_path=None):
+    """扫描所有「无邮箱」企业，划入异常记录（幂等：已有 open 异常则跳过）。
+
+    返回 {scanned, new, skipped}。获客后调用一次，把「没拿到邮箱」的企业全部标记异常。"""
+    conn = init_db(db_path)
+    rows = [dict(r) for r in conn.execute(
+        "SELECT main_id, company_name, country, website, phone, backfilled FROM companies "
+        "WHERE email IS NULL OR email = ''").fetchall()]
+    existing = {r["main_id"] for r in conn.execute(
+        "SELECT main_id FROM email_anomalies WHERE status='open'").fetchall()}
+    now = now_iso()
+    new = 0
+    for r in rows:
+        if r["main_id"] in existing:
+            continue
+        reason = analyze_no_email_reason(r)
+        conn.execute(
+            "INSERT INTO email_anomalies (main_id, task_id, company_name, country, reason, status, created_at) "
+            "VALUES (?,?,?,?,?, 'open', ?)",
+            (r["main_id"], task_id, r["company_name"], r["country"], reason, now))
+        new += 1
+    conn.commit()
+    conn.close()
+    return {"scanned": len(rows), "new": new, "skipped": len(rows) - new}
+
+
+def record_email_anomaly(main_id, task_id=None, reason=None, company_name=None,
+                         country=None, db_path=None):
+    """手工/脚本给单个企业记一条无邮箱异常（reason 不传则启发式分析）。返回 anomaly id。"""
+    conn = init_db(db_path)
+    row = conn.execute(
+        "SELECT company_name, country, website, phone, backfilled FROM companies WHERE main_id=?",
+        (main_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise ValueError(f"企业不存在: {main_id}")
+    if reason is None:
+        reason = analyze_no_email_reason(dict(row))
+    now = now_iso()
+    cur = conn.execute(
+        "INSERT INTO email_anomalies (main_id, task_id, company_name, country, reason, status, created_at) "
+        "VALUES (?,?,?,?,?, 'open', ?)",
+        (main_id, task_id, company_name or row["company_name"],
+         country or row["country"], reason, now))
+    conn.commit()
+    anomaly_id = cur.lastrowid
+    conn.close()
+    return anomaly_id
+
+
+def list_email_anomalies(status="open", limit=None, db_path=None):
+    """无邮箱异常记录列表（status: open/resolved/None=全部），join 企业信息。"""
+    conn = init_db(db_path)
+    sql = ("SELECT a.*, c.website, c.phone FROM email_anomalies a "
+           "LEFT JOIN companies c ON a.main_id=c.main_id")
+    conds, params = [], []
+    if status:
+        conds.append("a.status=?")
+        params.append(status)
+    if conds:
+        sql += " WHERE " + " AND ".join(conds)
+    sql += " ORDER BY a.id DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    conn.close()
+    return rows
+
+
+def resolve_email_anomaly(anomaly_id, resolved=True, db_path=None):
+    """关闭/重开一条无邮箱异常（企业补到邮箱后人工关闭）。"""
+    conn = init_db(db_path)
+    now = now_iso()
+    conn.execute(
+        "UPDATE email_anomalies SET status=?, resolved_at=? WHERE id=?",
+        ("resolved" if resolved else "open", now if resolved else None, anomaly_id))
+    conn.commit()
+    conn.close()
+    return {"anomaly_id": anomaly_id, "status": "resolved" if resolved else "open"}
+
+
+# ---- 企业邮箱(Gmail/Workspace) 账号 + 联系人同步轨迹 ----
+
+def save_email_account(account_email, account_type="workspace", db_path=None):
+    """绑定企业邮箱账号（账号元数据落 email_accounts，OAuth token 由 gmail_sync 存文件）。"""
+    conn = init_db(db_path)
+    now = now_iso()
+    conn.execute(
+        "INSERT INTO email_accounts (account_email, account_type, status, bound_at, updated_at) "
+        "VALUES (?,?, 'active', ?, ?) "
+        "ON CONFLICT(account_email) DO UPDATE SET account_type=excluded.account_type, "
+        "status='active', updated_at=excluded.updated_at",
+        (account_email, account_type, now, now))
+    conn.commit()
+    conn.close()
+    return {"account_email": account_email, "account_type": account_type, "status": "active"}
+
+
+def get_email_account(db_path=None):
+    """取当前绑定（最新 active）的企业邮箱账号，无则 None。"""
+    conn = init_db(db_path)
+    r = conn.execute(
+        "SELECT * FROM email_accounts WHERE status='active' ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    return dict(r) if r else None
+
+
+def update_email_account_sync(account_email, db_path=None):
+    """同步完成后刷新 last_sync_at。"""
+    conn = init_db(db_path)
+    now = now_iso()
+    conn.execute(
+        "UPDATE email_accounts SET last_sync_at=?, updated_at=? WHERE account_email=?",
+        (now, now, account_email))
+    conn.commit()
+    conn.close()
+
+
+def queue_gmail_contacts(main_ids=None, db_path=None):
+    """把企业的可同步邮箱标记为「待同步」pending（未入 gmail_contacts 的才入）。
+
+    获客入库后调用，把「有邮箱」的新客户自动排队，等 gmail_sync.sync 推送到企业邮箱联系人。
+    main_ids=None 时扫全部有邮箱企业。返回 {queued, skipped}。"""
+    conn = init_db(db_path)
+    if main_ids:
+        ph = ",".join("?" for _ in main_ids)
+        rows = [dict(r) for r in conn.execute(
+            f"SELECT main_id, company_name, country, email FROM companies "
+            f"WHERE main_id IN ({ph})", list(main_ids))]
+    else:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT main_id, company_name, country, email FROM companies "
+            "WHERE email IS NOT NULL AND email != ''")]
+    existing = {(r["main_id"], r["email"]) for r in conn.execute(
+        "SELECT main_id, email FROM gmail_contacts").fetchall()}
+    now = now_iso()
+    queued = skipped = 0
+    for r in rows:
+        for i, email in enumerate(split_emails(r["email"]), start=1):
+            if not is_syncable_email(email):
+                skipped += 1
+                continue
+            if (r["main_id"], email) in existing:
+                skipped += 1
+                continue
+            note = contact_note(r["country"], r["main_id"], r["company_name"], i)
+            conn.execute(
+                "INSERT OR IGNORE INTO gmail_contacts (main_id, email, note, status, created_at) "
+                "VALUES (?,?,?, 'pending', ?)",
+                (r["main_id"], email, note, now))
+            existing.add((r["main_id"], email))
+            queued += 1
+    conn.commit()
+    conn.close()
+    return {"queued": queued, "skipped": skipped}
+
+
+def mark_gmail_contact(main_id, email, note, resource_name=None, status="synced",
+                       error=None, db_path=None):
+    """记录一个企业邮箱 → Google 联系人同步结果（UPSERT by main_id+email）。"""
+    conn = init_db(db_path)
+    now = now_iso()
+    conn.execute(
+        "INSERT INTO gmail_contacts (main_id, email, note, contact_resource_name, status, error, synced_at, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(main_id, email) DO UPDATE SET note=excluded.note, "
+        "contact_resource_name=excluded.contact_resource_name, status=excluded.status, "
+        "error=excluded.error, synced_at=excluded.synced_at",
+        (main_id, email, note, resource_name, status, error,
+         now if status == "synced" else None, now))
+    conn.commit()
+    conn.close()
+
+
+def list_gmail_contacts(main_id=None, status=None, limit=None, db_path=None):
+    """企业邮箱联系人同步轨迹（可按 main_id / status 过滤），join 企业名。"""
+    conn = init_db(db_path)
+    sql = ("SELECT gc.*, c.company_name, c.country FROM gmail_contacts gc "
+           "LEFT JOIN companies c ON gc.main_id=c.main_id")
+    conds, params = [], []
+    if main_id:
+        conds.append("gc.main_id=?")
+        params.append(main_id)
+    if status:
+        conds.append("gc.status=?")
+        params.append(status)
+    if conds:
+        sql += " WHERE " + " AND ".join(conds)
+    sql += " ORDER BY gc.id DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    conn.close()
+    return rows
+
+
+def gmail_sync_stats(db_path=None):
+    """企业邮箱联系人同步概览：待同步/已同步/失败 各多少 + 覆盖企业数。"""
+    conn = init_db(db_path)
+    r = conn.execute(
+        "SELECT COUNT(*) AS total, "
+        "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending, "
+        "SUM(CASE WHEN status='synced' THEN 1 ELSE 0 END) AS synced, "
+        "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed "
+        "FROM gmail_contacts").fetchone()
+    n_companies = conn.execute(
+        "SELECT COUNT(DISTINCT main_id) AS n FROM gmail_contacts WHERE status='synced'").fetchone()["n"]
+    conn.close()
+    return {"total": r["total"] or 0, "pending": r["pending"] or 0,
+            "synced": r["synced"] or 0, "failed": r["failed"] or 0,
+            "companies_synced": n_companies or 0}
 
 
 if __name__ == "__main__":
