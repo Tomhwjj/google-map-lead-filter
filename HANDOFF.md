@@ -16,6 +16,9 @@
 
 ## 改动记录（按日倒序）
 
+- **2026-09-08**
+  - **去重机制修复（同公司多域名裂成两条，task_issues #10）**：Alians OZE 主站(alians-oze.pl)+商城(alians-shop.pl)同一次入库被拆成两条 new(LDPL-66d5d4ebc3 + LDPL-29fdf9d3c3)。根因：`core._find_existing` 去重键=domain(优先)+name_key(兜底)，两条 domain 不同、company_name 也不同(Google Maps 超长全名 vs 商城短名)，**两信号都失效**；邮箱后缀 @alians-oze.pl 铁证在手却未参与比对。修复：`core.py` 加 `_find_existing_by_email_suffix`——domain/name_key 都查不到时，用企业自有邮箱后缀反查（剔除免费邮箱域 `FREE_EMAIL_DOMAINS`），命中走 diff 审核而非误判 new。测试 `D:/Agent/tmp/test_dedup.py` PASS（主站 new=1 → 商城 diff=1）。⚠️ 语言子域归一化（en./pl./www.）仍待办，与本兜底互补。
+  - **Alians OZE 合并重复卡 + 漏判修正**：商城 LDPL-29fdf9d3c3 并入主站 LDPL-66d5d4ebc3（scale 继承 mid，4 邮箱 3 品牌 Deye/Fronius/FoxESS 取并集）；产品匹配漏判 0 分修正（Deye 经 Heckman 认证在售 → sells_deye=1，43C→92A），提重点关注客户。
 - **2026-09-07**
   - **数据清洗**：删 25 家噪声企业（JUNK_HOSTS，JSON 导出 + DB 备份）→ 378 家；清 4 家垃圾邮箱（20 条）；修 26 家标题污染企业名（NAME_FIX）。脚本 `scripts/clean_data.py`（--dry-run 预览）。
   - **企业邮箱(Gmail)集成 + UI 整合**：绑定 `hsh@wccsolar.es`，OAuth 授权完成（refresh token 落 `data/gmail_token.json`）。踩坑：googleapiclient 默认 httplib2 对 HTTP 代理 https 隧道有 bug（WinError 10060），改 `requests AuthorizedSession` + 直接 REST POST。同步按钮整合进企业库页（去独立 `/gmail` 页，旧 URL 跳转企业库），卡片显示 已同步/未同步，顶部 gmail-bar 加「去邮箱」入口。
@@ -90,4 +93,5 @@
 - 数据文件（`D:/Agent/tmp/*.json`）是会话产物，不入 git。
 - **SQLite 库 `data/leads.db` 不入 git**（企业数据 + 频繁变动）；**复刻报告 `reports/` 入 git**（永久存档，作下次 AI 迭代上下文）。
 - 口径唯一来源 `references/qualification-rules.md`，SKILL.md 不重复数字。
+- **发现获客/背调问题 → 立即 `record_issue` 落库，不等用户提醒**：凡是在背调、评分、入库过程中发现的数据质量/流程缺陷（漏抓、漏判、字段错误、方法盲区），修正数据的同时**必须马上**用 `core.record_issue` 补进对应任务的 `task_issues` 表，不能只改数据了事（教训：Alians OZE 产品匹配漏判 0 分，我改完字段重算分数却忘了落库，被用户追问才补）。
 - **技术债**：`render_report.py` 的 `wa_link()` 硬编码法国 +33，扩展德国(+49)/荷兰(+31)/西班牙(+34)前要按 `country` 映射。

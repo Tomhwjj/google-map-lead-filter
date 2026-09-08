@@ -91,6 +91,49 @@ def finish_task(task_id, db_path=None):
     return {"task_id": task_id, "finished_at": now, "duration_sec": duration}
 
 
+# 免费/公共邮箱域：邮箱后缀做「同公司」识别时排除这些域，
+# 避免两家不同公司共用 gmail.com 被误判为同一家。
+# （企业自有域名后缀如 alians-oze.pl 才是同公司铁证）
+FREE_EMAIL_DOMAINS = {
+    "gmail.com", "googlemail.com", "hotmail.com", "outlook.com", "live.com",
+    "msn.com", "yahoo.com", "yahoo.pl", "yahoo.de", "aol.com", "icloud.com",
+    "me.com", "mac.com", "proton.me", "protonmail.com", "gmx.com", "gmx.de",
+    "gmx.net", "web.de", "mail.com", "zoho.com", "yandex.com", "yandex.ru",
+    "qq.com", "163.com", "126.com", "sina.com",
+    "wp.pl", "o2.pl", "interia.pl", "onet.pl", "poczta.onet.pl", "tlen.pl",
+    "free.fr", "orange.fr", "laposte.net", "sfr.fr", "wanadoo.fr",
+    "t-online.de", "freenet.de",
+}
+
+
+def _email_suffixes(email):
+    """从邮箱串提取企业自有域名后缀（去重、剔除免费域）。"""
+    out = set()
+    for e in split_emails(email):
+        _, _, dom = (e or "").rpartition("@")
+        dom = dom.lower().strip()
+        if dom and dom not in FREE_EMAIL_DOMAINS:
+            out.add(dom)
+    return out
+
+
+def _find_existing_by_email_suffix(conn, email):
+    """domain/name_key 都查不到时，用邮箱后缀反查已有企业（同公司多域名场景）。
+
+    主站 alians-oze.pl 与商城 alians-shop.pl：域名不同、公司名也不同，但邮箱后缀
+    都是 @alians-oze.pl —— 这是「同一家」的铁证。命中即返回现有行，走 diff 审核
+    而非误判全新 INSERT。仅匹配企业自有域（已剔除免费邮箱域）。
+    """
+    suffixes = _email_suffixes(email)
+    if not suffixes:
+        return None
+    for row in conn.execute(
+            "SELECT * FROM companies WHERE email IS NOT NULL AND email != ''").fetchall():
+        if suffixes & _email_suffixes(row["email"]):
+            return row
+    return None
+
+
 def _find_existing(conn, domain, name_key):
     """按去重键查已有企业：domain 优先，退回 name_key。返回 row 或 None。"""
     if domain:
@@ -169,6 +212,9 @@ def ingest_leads(leads, task_id, dry_run=False, db_path=None):
         domain = normalize_domain(lead.get("website"))
         name_key = normalize_name(lead.get("company_name"))
         existing = _find_existing(conn, domain, name_key)
+        if existing is None:
+            # 三级兜底：域名/公司名都失效时，用邮箱后缀反查（同公司多域名场景）
+            existing = _find_existing_by_email_suffix(conn, lead.get("email"))
 
         if existing is None:
             stats["new"] += 1
