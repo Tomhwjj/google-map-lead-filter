@@ -14,7 +14,7 @@
   task_issues     — 获客问题记录（task_id 关联任务，分类/标题/详情/方案，供迭代复盘）
   email_accounts  — 绑定企业邮箱账号（Gmail/Workspace，OAuth token 存 data/gmail_token.json）
   gmail_contacts  — 企业邮箱 → Google 联系人同步轨迹（备注=国家+主码+企业名+n）
-  email_anomalies — 无邮箱异常记录（获客没拿到邮箱 → 划入异常 + 分析原因）
+  email_anomalies — 邮箱异常记录（无邮箱：获客没拿到邮箱 → 分析原因；无效邮箱：bounce 退信 → 记失效邮箱+原因，同步时过滤）
 
 被 core.py / webapp 共用；也可直接跑初始化：
     python db.py                 # 用默认库路径初始化
@@ -199,7 +199,8 @@ CREATE TABLE IF NOT EXISTS gmail_contacts (
     email                  TEXT,
     note                   TEXT,          -- 备注：{国家} {主码} {企业名} #{n}
     contact_resource_name  TEXT,          -- people/{id}
-    status                 TEXT DEFAULT 'pending',  -- pending / synced / failed
+    skill_group            TEXT,          -- 归入的 skill 分组 resourceName（contactGroups/xxx），保证同企业不拆组
+    status                 TEXT DEFAULT 'pending',  -- pending / synced / failed / invalid
     error                  TEXT,
     synced_at              TEXT,
     created_at             TEXT,
@@ -209,14 +210,17 @@ CREATE TABLE IF NOT EXISTS gmail_contacts (
 CREATE INDEX IF NOT EXISTS idx_gmail_contacts_main ON gmail_contacts(main_id);
 CREATE INDEX IF NOT EXISTS idx_gmail_contacts_status ON gmail_contacts(status);
 
--- 无邮箱异常记录：获客时没拿到邮箱 → 划入异常 + 分析原因（人工/启发式）
+-- 邮箱异常记录：两类共用一张表，靠 email 列是否为空区分。
+--   email 为空  → 「无邮箱」异常（获客没拿到邮箱，分析为什么没邮箱）
+--   email 非空  → 「无效邮箱」异常（bounce 550 User doesn't exist 等，分析为什么无效）
 CREATE TABLE IF NOT EXISTS email_anomalies (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     main_id      TEXT,
     task_id      TEXT,
     company_name TEXT,
     country      TEXT,
-    reason       TEXT,          -- 分析原因
+    email        TEXT,          -- 无效邮箱地址（无邮箱异常该列为空）
+    reason       TEXT,          -- 分析原因（无邮箱=为什么没邮箱；无效邮箱=为什么无效）
     status       TEXT DEFAULT 'open',  -- open / resolved
     created_at   TEXT,
     resolved_at  TEXT
@@ -248,6 +252,16 @@ def init_db(db_path=None):
     ccols = [r[1] for r in conn.execute("PRAGMA table_info(companies)")]
     if "scale_basis" not in ccols:
         conn.execute("ALTER TABLE companies ADD COLUMN scale_basis TEXT")
+    # 老库迁移：email_anomalies 补 email 列（无效邮箱地址；无邮箱异常该列为空）
+    ecols = [r[1] for r in conn.execute("PRAGMA table_info(email_anomalies)")]
+    if "email" not in ecols:
+        conn.execute("ALTER TABLE email_anomalies ADD COLUMN email TEXT")
+    # email 列索引须在 ALTER 之后建（老库 execute SCHEMA 时该列尚不存在）
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_email_anomalies_email ON email_anomalies(email)")
+    # 老库迁移：gmail_contacts 补 skill_group 列（企业→skill 分组映射，保证同企业不拆组）
+    gcols = [r[1] for r in conn.execute("PRAGMA table_info(gmail_contacts)")]
+    if "skill_group" not in gcols:
+        conn.execute("ALTER TABLE gmail_contacts ADD COLUMN skill_group TEXT")
     conn.commit()
     return conn
 

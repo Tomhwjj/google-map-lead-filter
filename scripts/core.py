@@ -926,7 +926,7 @@ def list_email_anomalies(status="open", limit=None, db_path=None):
 
 
 def resolve_email_anomaly(anomaly_id, resolved=True, db_path=None):
-    """关闭/重开一条无邮箱异常（企业补到邮箱后人工关闭）。"""
+    """关闭/重开一条邮箱异常（企业补到邮箱/换有效邮箱后人工关闭）。"""
     conn = init_db(db_path)
     now = now_iso()
     conn.execute(
@@ -935,6 +935,83 @@ def resolve_email_anomaly(anomaly_id, resolved=True, db_path=None):
     conn.commit()
     conn.close()
     return {"anomaly_id": anomaly_id, "status": "resolved" if resolved else "open"}
+
+
+def mark_email_invalid(email, reason=None, main_id=None, company_name=None,
+                       country=None, db_path=None):
+    """标记某邮箱为无效（bounce 550 User doesn't exist 等），落 email_anomalies。
+
+    无效邮箱（email 非空）与「无邮箱」异常（email 空）同表，同步联系人时按
+    email 非空 + status=open 过滤跳过。幂等：同邮箱已有 open 记录则更新 reason 后
+    返回既有 id，不重复建。返回 anomaly id。
+    """
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        raise ValueError(f"非法邮箱: {email!r}")
+    reason = reason or "bounce: User doesn't exist"
+    conn = init_db(db_path)
+    # 传了 main_id 但没传公司名/国家时，自动从企业表补，保证异常记录自描述
+    if main_id and (not company_name or not country):
+        row_c = conn.execute(
+            "SELECT company_name, country FROM companies WHERE main_id=?",
+            (main_id,)).fetchone()
+        if row_c:
+            company_name = company_name or row_c["company_name"]
+            country = country or row_c["country"]
+    row = conn.execute(
+        "SELECT id, reason FROM email_anomalies WHERE email=? AND status='open'",
+        (email,)).fetchone()
+    if row:
+        if row["reason"] != reason:
+            conn.execute("UPDATE email_anomalies SET reason=? WHERE id=?",
+                         (reason, row["id"]))
+        # 回填历史记录缺失的 main_id/公司名/国家
+        conn.execute(
+            "UPDATE email_anomalies SET main_id=COALESCE(NULLIF(main_id,''), ?), "
+            "company_name=COALESCE(NULLIF(company_name,''), ?), "
+            "country=COALESCE(NULLIF(country,''), ?) WHERE id=?",
+            (main_id, company_name, country, row["id"]))
+        conn.commit()
+        anomaly_id = row["id"]
+    else:
+        now = now_iso()
+        cur = conn.execute(
+            "INSERT INTO email_anomalies (main_id, task_id, company_name, country, "
+            "email, reason, status, created_at) VALUES (?,?,?,?,?,?, 'open', ?)",
+            (main_id, None, company_name, country, email, reason, now))
+        conn.commit()
+        anomaly_id = cur.lastrowid
+    conn.close()
+    return anomaly_id
+
+
+def list_invalid_emails(status="open", limit=None, db_path=None):
+    """无效邮箱列表（email 非空 = 无效邮箱，区别于无邮箱异常），join 企业信息。"""
+    conn = init_db(db_path)
+    sql = ("SELECT a.*, c.website, c.phone FROM email_anomalies a "
+           "LEFT JOIN companies c ON a.main_id=c.main_id "
+           "WHERE a.email IS NOT NULL AND a.email != ''")
+    params = []
+    if status:
+        sql += " AND a.status=?"
+        params.append(status)
+    sql += " ORDER BY a.id DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    conn.close()
+    return rows
+
+
+def get_invalid_email_set(db_path=None):
+    """返回所有 open 状态无效邮箱的小写集合（供同步联系人前过滤）。"""
+    conn = init_db(db_path)
+    s = {r["email"].lower() for r in conn.execute(
+        "SELECT email FROM email_anomalies "
+        "WHERE email IS NOT NULL AND email != '' AND status='open'")}
+    conn.close()
+    return s
 
 
 # ---- 企业邮箱(Gmail/Workspace) 账号 + 联系人同步轨迹 ----
@@ -991,11 +1068,18 @@ def queue_gmail_contacts(main_ids=None, db_path=None):
             "WHERE email IS NOT NULL AND email != ''")]
     existing = {(r["main_id"], r["email"]) for r in conn.execute(
         "SELECT main_id, email FROM gmail_contacts").fetchall()}
+    # 已标记无效的邮箱（bounce 退信）不再重新排队，避免把坏邮箱又同步进联系人分组
+    invalid = {r["email"].lower() for r in conn.execute(
+        "SELECT email FROM email_anomalies "
+        "WHERE email IS NOT NULL AND email != '' AND status='open'")}
     now = now_iso()
     queued = skipped = 0
     for r in rows:
         for i, email in enumerate(split_emails(r["email"]), start=1):
             if not is_syncable_email(email):
+                skipped += 1
+                continue
+            if email.lower() in invalid:
                 skipped += 1
                 continue
             if (r["main_id"], email) in existing:
@@ -1014,17 +1098,19 @@ def queue_gmail_contacts(main_ids=None, db_path=None):
 
 
 def mark_gmail_contact(main_id, email, note, resource_name=None, status="synced",
-                       error=None, db_path=None):
+                       error=None, skill_group=None, db_path=None):
     """记录一个企业邮箱 → Google 联系人同步结果（UPSERT by main_id+email）。"""
     conn = init_db(db_path)
     now = now_iso()
     conn.execute(
-        "INSERT INTO gmail_contacts (main_id, email, note, contact_resource_name, status, error, synced_at, created_at) "
-        "VALUES (?,?,?,?,?,?,?,?) "
+        "INSERT INTO gmail_contacts (main_id, email, note, contact_resource_name, "
+        "skill_group, status, error, synced_at, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(main_id, email) DO UPDATE SET note=excluded.note, "
-        "contact_resource_name=excluded.contact_resource_name, status=excluded.status, "
+        "contact_resource_name=excluded.contact_resource_name, "
+        "skill_group=excluded.skill_group, status=excluded.status, "
         "error=excluded.error, synced_at=excluded.synced_at",
-        (main_id, email, note, resource_name, status, error,
+        (main_id, email, note, resource_name, skill_group, status, error,
          now if status == "synced" else None, now))
     conn.commit()
     conn.close()

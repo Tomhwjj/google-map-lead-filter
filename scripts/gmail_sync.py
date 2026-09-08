@@ -11,9 +11,13 @@
 流程：
   python scripts/gmail_sync.py authorize        # 首次：浏览器授权，存 refresh token（此后自动续期保持登录态）
   python scripts/gmail_sync.py status           # 查看绑定 + 同步概览
-  python scripts/gmail_sync.py sync             # 把所有「有邮箱」企业自动加进联系人
+  python scripts/gmail_sync.py sync             # 把所有「有邮箱」企业自动加进联系人（自动跳过已标记无效的邮箱）
   python scripts/gmail_sync.py sync <main_id>   # 只同步某一家企业
   python scripts/gmail_sync.py sync --dry-run   # 预览不落库/不调 API
+  python scripts/gmail_sync.py mark-invalid --email przetargi@kdpinvest.com --reason "bounce 550 User doesn't exist"
+                                                # 把退信邮箱标记为无效（同步时过滤）
+  python scripts/gmail_sync.py clean-invalid    # 从 Gmail 硬删「已同步但已标记无效」的联系人
+  python scripts/gmail_sync.py clean-invalid --dry-run  # 预览将删哪些，不真删
 
 安全/合规铁律：
   - 只【加联系人 + 备注】，绝不自动发邮件（发送 100% 人工确认）
@@ -29,9 +33,10 @@ from datetime import datetime
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from core import (contact_note, get_email_account, is_syncable_email,
-                  list_companies, mark_gmail_contact, save_email_account,
-                  split_emails, update_email_account_sync)
+from core import (contact_note, get_email_account, get_invalid_email_set,
+                  is_syncable_email, list_companies, mark_email_invalid,
+                  mark_gmail_contact, save_email_account, split_emails,
+                  update_email_account_sync)
 from db import init_db, now_iso
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -225,18 +230,91 @@ def delete_group_by_name(session, name):
     return False
 
 
-def assign_to_skill_groups(session, resources, start_num):
-    """把一批联系人按「每组最多50」从 skill{start_num} 起依次归组，返回实际归入条数。"""
-    resources = [r for r in resources if r]
-    if not resources:
+def _skill_group_names(session):
+    """拉全部 contactGroups，返回 {resourceName: name}（用于反查联系人的 skill 分组）。"""
+    resp = session.get("https://people.googleapis.com/v1/contactGroups",
+                       params={"pageSize": 1000})
+    resp.raise_for_status()
+    return {g["resourceName"]: g.get("name", "") for g in resp.json().get("contactGroups", [])}
+
+
+def _contact_skill_group(session, resource, group_names=None):
+    """People API 反查某联系人所属的 skill 分组（名字匹配 skill1/skill2…），返回 resourceName 或 None。"""
+    if not resource:
+        return None
+    try:
+        resp = session.get(
+            f"https://people.googleapis.com/v1/{resource}",
+            params={"personFields": "memberships"})
+        resp.raise_for_status()
+    except Exception:
+        return None
+    grs = [m["contactGroupMembership"]["contactGroupResourceName"]
+           for m in resp.json().get("memberships", [])
+           if m.get("contactGroupMembership", {}).get("contactGroupResourceName")]
+    if not grs:
+        return None
+    if group_names is None:
+        group_names = _skill_group_names(session)
+    for gr in grs:
+        if re.match(r"^skill\d+$", group_names.get(gr, "")):
+            return gr
+    return None
+
+
+def assign_by_company(session, conn, company_resources):
+    """按企业归组：同一企业的联系人必须进同一 skill 分组（组容量≤50，不拆企业）。
+
+    company_resources: {main_id: [resourceName, ...]}（本次新增的联系人）。
+      本地已有分组的企业 → 新邮箱补进原组；
+      本地无记录但已有联系人的企业 → People API 反查历史分组补进（跨次 sync 不拆）；
+      全新企业 → 装进当前组，装满 50 开新组。
+    写回 gmail_contacts.skill_group。返回归入条数。
+    """
+    company_resources = {k: [r for r in v if r] for k, v in company_resources.items()}
+    company_resources = {k: v for k, v in company_resources.items() if v}
+    if not company_resources:
         return 0
+
+    # 本地已知分组：main_id -> group resourceName
+    known = {}
+    for r in conn.execute(
+        "SELECT main_id, skill_group FROM gmail_contacts "
+        "WHERE skill_group IS NOT NULL AND skill_group != ''").fetchall():
+        known.setdefault(r["main_id"], r["skill_group"])
+
+    group_names = None  # 懒加载 contactGroups 名字映射
+    cur_group = None
+    cur_used = 0
+    next_num = _max_skill_group_num(session) + 1
     total = 0
-    num = start_num
-    for i in range(0, len(resources), 50):
-        batch = resources[i:i + 50]
-        grp = get_or_create_skill_group(session, num)
-        total += add_contacts_to_group(session, grp, batch)
-        num += 1
+
+    for main_id, resources in company_resources.items():
+        group = known.get(main_id)
+        if not group:
+            row = conn.execute(
+                "SELECT contact_resource_name FROM gmail_contacts "
+                "WHERE main_id=? AND status='synced' AND contact_resource_name IS NOT NULL "
+                "AND contact_resource_name != '' LIMIT 1", (main_id,)).fetchone()
+            if row:
+                if group_names is None:
+                    group_names = _skill_group_names(session)
+                group = _contact_skill_group(session, row["contact_resource_name"], group_names)
+        if not group:
+            # 全新企业：装进当前组，装不下开新组
+            if cur_group is None or cur_used + len(resources) > 50:
+                cur_group = get_or_create_skill_group(session, next_num)
+                next_num += 1
+                cur_used = 0
+            group = cur_group
+            cur_used += len(resources)
+
+        cnt = add_contacts_to_group(session, group, resources)
+        total += cnt
+        for res in resources:
+            conn.execute("UPDATE gmail_contacts SET skill_group=? WHERE contact_resource_name=?",
+                         (group, res))
+    conn.commit()
     return total
 
 
@@ -252,16 +330,20 @@ def sync_all(service, dry_run=False, db_path=None):
     """把所有「有邮箱」企业的可同步邮箱加进联系人，逐条落 gmail_contacts 轨迹。"""
     conn = init_db(db_path)
     done = _pending_emails(conn)
+    invalid = get_invalid_email_set(db_path=db_path)
     companies = list_companies(has_email=True, db_path=db_path)
     account = get_email_account(db_path=db_path)
 
     added = skipped = failed = 0
-    added_resources = []
+    company_resources = {}   # main_id -> [resourceName, ...] 本次新增
     for c in companies:
         emails = c.get("email_list") or []
         for i, email in enumerate(emails, start=1):
             key = (c["main_id"], email.lower())
             if key in done:
+                skipped += 1
+                continue
+            if email.lower() in invalid:
                 skipped += 1
                 continue
             if not is_syncable_email(email):
@@ -276,7 +358,7 @@ def sync_all(service, dry_run=False, db_path=None):
                 resource = add_contact(service, c["company_name"], email, note)
                 mark_gmail_contact(c["main_id"], email, note, resource_name=resource,
                                    status="synced", db_path=db_path)
-                added_resources.append(resource)
+                company_resources.setdefault(c["main_id"], []).append(resource)
                 print(f"✓ {c['company_name']}: {email} → {resource}")
                 added += 1
             except Exception as e:
@@ -284,11 +366,10 @@ def sync_all(service, dry_run=False, db_path=None):
                                    error=str(e), db_path=db_path)
                 print(f"✗ {c['company_name']}: {email} 失败 {e}")
                 failed += 1
-    if added_resources and not dry_run:
+    if company_resources and not dry_run:
         try:
-            start_num = _max_skill_group_num(service) + 1
-            n = assign_to_skill_groups(service, added_resources, start_num)
-            print(f"✓ 已把 {n} 条联系人归入 skill{start_num} 起的分组（每组≤50）")
+            n = assign_by_company(service, conn, company_resources)
+            print(f"✓ 已把 {n} 条联系人按企业归入 skill 分组（同一企业不拆组）")
         except Exception as e:
             print(f"⚠️ 归组失败：{e}")
     if account and not dry_run:
@@ -302,16 +383,20 @@ def sync_company(service, main_id, dry_run=False, db_path=None):
     """只同步某一家企业的所有可同步邮箱。"""
     conn = init_db(db_path)
     done = _pending_emails(conn)
+    invalid = get_invalid_email_set(db_path=db_path)
     companies = list_companies(db_path=db_path)
     company = next((c for c in companies if c["main_id"] == main_id), None)
     if not company:
         conn.close()
         raise ValueError(f"企业不存在: {main_id}")
     added = skipped = failed = 0
-    added_resources = []
+    company_resources = {}   # main_id -> [resourceName, ...] 本次新增
     for i, email in enumerate(company.get("email_list") or [], start=1):
         key = (main_id, email.lower())
         if key in done:
+            skipped += 1
+            continue
+        if email.lower() in invalid:
             skipped += 1
             continue
         if not is_syncable_email(email):
@@ -326,22 +411,69 @@ def sync_company(service, main_id, dry_run=False, db_path=None):
             resource = add_contact(service, company["company_name"], email, note)
             mark_gmail_contact(main_id, email, note, resource_name=resource,
                                status="synced", db_path=db_path)
-            added_resources.append(resource)
+            company_resources.setdefault(main_id, []).append(resource)
             print(f"✓ {email} → {resource}")
             added += 1
         except Exception as e:
             mark_gmail_contact(main_id, email, note, status="failed", error=str(e), db_path=db_path)
             print(f"✗ {email} 失败 {e}")
             failed += 1
-    if added_resources and not dry_run:
+    if company_resources and not dry_run:
         try:
-            start_num = _max_skill_group_num(service) + 1
-            n = assign_to_skill_groups(service, added_resources, start_num)
-            print(f"✓ 已把 {n} 条联系人归入 skill{start_num} 起的分组（每组≤50）")
+            n = assign_by_company(service, conn, company_resources)
+            print(f"✓ 已把 {n} 条联系人按企业归入 skill 分组（同一企业不拆组）")
         except Exception as e:
             print(f"⚠️ 归组失败：{e}")
     conn.close()
     return {"added": added, "skipped": skipped, "failed": failed}
+
+
+def remove_invalid_contacts(session, dry_run=False, db_path=None):
+    """硬删「已同步但已被标记无效」的 Gmail 联系人，并把 gmail_contacts 状态标 invalid。
+
+    解决 bounce 邮箱（如 przetargi@kdpinvest.com）已同步进 skill 分组、群发踩雷的问题：
+    先用 mark-invalid 标记无效 → 再 clean-invalid 把该联系人从 Gmail 删掉 + 轨迹标 invalid。
+    显式命令，绝不自动执行（删除不可逆）。返回删除条数。
+    """
+    conn = init_db(db_path)
+    invalid = get_invalid_email_set(db_path=db_path)
+    if not invalid:
+        conn.close()
+        print("没有 open 状态的无效邮箱，无需清理。")
+        return 0
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, main_id, email, contact_resource_name FROM gmail_contacts "
+        "WHERE status='synced' AND contact_resource_name IS NOT NULL "
+        "AND contact_resource_name != ''").fetchall()]
+    targets = [r for r in rows if (r["email"] or "").lower() in invalid]
+    if not targets:
+        conn.close()
+        print("无效邮箱均未同步成联系人，无需删除。")
+        return 0
+
+    deleted = 0
+    for r in targets:
+        email = r["email"]
+        resource = r["contact_resource_name"]
+        if dry_run:
+            print(f"[dry-run] 将删除 {email} ({resource})")
+            deleted += 1
+            continue
+        try:
+            resp = session.delete(
+                f"https://people.googleapis.com/v1/{resource}:deleteContact")
+            resp.raise_for_status()
+            conn.execute(
+                "UPDATE gmail_contacts SET status='invalid', synced_at=NULL, "
+                "error='标记无效，已从 Gmail 删除' WHERE id=?", (r["id"],))
+            print(f"✓ 已删除无效联系人 {email} ({resource})")
+            deleted += 1
+        except Exception as e:
+            print(f"✗ 删除失败 {email}: {e}")
+    conn.commit()
+    conn.close()
+    print(f"\n完成：删除 {deleted} 条（目标 {len(targets)} 条）")
+    return deleted
 
 
 def split_skill_groups(db_path=None, dry_run=False):
@@ -394,12 +526,18 @@ def split_skill_groups(db_path=None, dry_run=False):
     if not (creds and creds.valid):
         raise SystemExit("尚未授权，先跑：python scripts/gmail_sync.py authorize")
     session = build_people(creds)
+    conn2 = init_db(db_path)
     total = 0
     for name, res in plan:
         grp = get_or_create_group(session, name)
         n = add_contacts_to_group(session, grp, res)
         total += n
+        for rname in res:
+            conn2.execute("UPDATE gmail_contacts SET skill_group=? WHERE contact_resource_name=?",
+                          (grp, rname))
         print(f"✓ {name}: 归入 {n} 条")
+    conn2.commit()
+    conn2.close()
     if delete_group_by_name(session, GROUP_NAME):
         print(f"✓ 已删除原分组「{GROUP_NAME}」")
     else:
@@ -427,10 +565,14 @@ def status(db_path=None):
 
 def main():
     ap = argparse.ArgumentParser(description="企业邮箱(Gmail)绑定 + 联系人自动同步")
-    ap.add_argument("cmd", choices=["authorize", "status", "sync", "skill"], help="authorize=首次授权 / status=状态 / sync=同步联系人 / skill=历史已同步按批次拆组(每组≤50)")
+    ap.add_argument("cmd", choices=["authorize", "status", "sync", "skill", "mark-invalid", "clean-invalid"],
+                    help="authorize=首次授权 / status=状态 / sync=同步联系人 / skill=历史已同步按批次拆组(每组≤50) / mark-invalid=标记退信无效邮箱 / clean-invalid=硬删已同步的无效邮箱联系人")
     ap.add_argument("main_id", nargs="?", help="sync 时可选：只同步某企业 main_id")
     ap.add_argument("--dry-run", action="store_true", help="预览不落库/不调 API")
     ap.add_argument("--account", default="", help="绑定账号邮箱（authorize 后落 email_accounts）")
+    ap.add_argument("--email", default="", help="mark-invalid: 退信无效邮箱地址")
+    ap.add_argument("--reason", default="", help="mark-invalid: 无效原因（默认 bounce: User doesn't exist）")
+    ap.add_argument("--company-id", default="", help="mark-invalid: 可选关联企业 main_id（自动补公司名/国家）")
     args = ap.parse_args()
 
     init_db()
@@ -455,6 +597,20 @@ def main():
             sync_all(service, dry_run=args.dry_run)
     elif args.cmd == "skill":
         split_skill_groups(dry_run=args.dry_run)
+    elif args.cmd == "mark-invalid":
+        if not args.email:
+            raise SystemExit("mark-invalid 需要 --email <退信邮箱>，例如："
+                             "--email przetargi@kdpinvest.com --reason \"bounce 550 User doesn't exist\"")
+        aid = mark_email_invalid(args.email, reason=args.reason or None,
+                                 main_id=args.company_id or None)
+        print(f"已标记无效邮箱: {args.email} (anomaly_id={aid})")
+        print("提示：同步时已自动跳过该邮箱；如它已同步成 Gmail 联系人，再跑 clean-invalid 删除。")
+    elif args.cmd == "clean-invalid":
+        creds = get_credentials(authorize_if_missing=True)
+        if not creds:
+            raise SystemExit("尚未授权，先跑：python scripts/gmail_sync.py authorize")
+        service = build_people(creds)
+        remove_invalid_contacts(service, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

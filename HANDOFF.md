@@ -21,6 +21,8 @@
   - **Alians OZE 合并重复卡 + 漏判修正**：商城 LDPL-29fdf9d3c3 并入主站 LDPL-66d5d4ebc3（scale 继承 mid，4 邮箱 3 品牌 Deye/Fronius/FoxESS 取并集）；产品匹配漏判 0 分修正（Deye 经 Heckman 认证在售 → sells_deye=1，43C→92A），提重点关注客户。
 - **2026-09-09**
   - **merge_leads.py 三层去重升级（同公司多域名归并，承接 09-08 ingest 层修复）**：① 修字段透传 bug——`merged.append` 7→13 字段，email/country/customer_type/address/profile_url/source_url 之前被丢（这就是「merge 阶段无邮箱」的真相，enf 源本有邮箱）；② 去重键升级——L0 domain + L1 邮箱后缀（企业自有域，剔除 `FREE_EMAIL_DOMAINS` 免费域）+ name 兜底自动合并，L2 电话相同只标疑似（`suspected_dups.csv`）不自动合并（加盟/黄页共用有小概率误杀，留人工），L3 公司名相似度暂不实现（误杀风险高，待设计停用词表+阈值）；③ email/phone 多值取并集，其余非空互补。测试 `D:/Agent/tmp/test_merge.py` PASS。⚠️ Alians 主站(gmaps无邮箱)vs商城(enf有邮箱)数据不对称场景 merge 层仍拦不住，真正兜底靠 ingest 层邮箱后缀（09-08 已修）。
+  - **无效邮箱过滤机制（bounce 退信，task_issues #11）**：KDP Invest 岗位邮箱 `przetargi@kdpinvest.com`（波兰语=招标/采购，岗位撤销后账号删除）`550 User doesn't exist` 退信，导致 skill2 群发整组失败。根因：系统把 5 个邮箱全 synced 进联系人分组，对 bounce 邮箱零感知。修复：① `email_anomalies` 表加 `email` 列（空=无邮箱异常、非空=无效邮箱），新增 `core.mark_email_invalid`（幂等，传 main_id 自动补公司名/国家）/`list_invalid_emails`/`get_invalid_email_set`；② `sync_all`/`sync_company`/`queue_gmail_contacts` 同步前查无效邮箱集合跳过；③ CLI 新增 `mark-invalid --email X --reason "..." [--company-id]` + `clean-invalid`（People API 硬删「已 synced 但已标记无效」的联系人，标 gmail_contacts status=invalid，显式命令不自动删）。przetargi@ 已标记（anomaly_id=181）。⚠️ 踩坑：`--main-id` flag 与位置参数 `main_id` 的 argparse dest 撞名导致传值丢失，改名 `--company-id`。测试 `D:/Agent/tmp/test_invalid_email.py` PASS。
+  - **同一企业邮箱同组（按企业归组，不拆企业）**：原 `assign_to_skill_groups` 把联系人扁平按「每 50 切一刀」，同一企业的多个邮箱会卡在 50 边界被拆到两组，且每次 sync 从 `max+1` 开新组→跨次 sync 必拆。重写为 `assign_by_company`：按 main_id 归组（同企业所有邮箱进同一组），组容量仍 ≤50 但不拆企业；`gmail_contacts` 加 `skill_group` 字段持久化企业→组映射，跨次 sync 新邮箱补进原组（本地无记录的历史企业用 People API `memberships` 反查已有分组）。`split_skill_groups` 历史拆组同步写回 skill_group。测试 `D:/Agent/tmp/test_company_group.py` PASS（A3+B2 同组 skill1、C50 撑满开 skill2）。
 - **2026-09-07**
   - **数据清洗**：删 25 家噪声企业（JUNK_HOSTS，JSON 导出 + DB 备份）→ 378 家；清 4 家垃圾邮箱（20 条）；修 26 家标题污染企业名（NAME_FIX）。脚本 `scripts/clean_data.py`（--dry-run 预览）。
   - **企业邮箱(Gmail)集成 + UI 整合**：绑定 `hsh@wccsolar.es`，OAuth 授权完成（refresh token 落 `data/gmail_token.json`）。踩坑：googleapiclient 默认 httplib2 对 HTTP 代理 https 隧道有 bug（WinError 10060），改 `requests AuthorizedSession` + 直接 REST POST。同步按钮整合进企业库页（去独立 `/gmail` 页，旧 URL 跳转企业库），卡片显示 已同步/未同步，顶部 gmail-bar 加「去邮箱」入口。
@@ -68,9 +70,9 @@
 - **Google 访问代理**：`127.0.0.1:33210`（与 git 同一代理，Google 被墙）。`gmail_sync.py` 模块顶部把 `HTTPS_PROXY/HTTP_PROXY` setdefault 成该代理
 - **⚠️ 关键坑**：googleapiclient 默认 httplib2 0.32 对 HTTP 代理的 https 隧道有 bug → 直连/代理都 `WinError 10060` 超时。已改 `google.auth.transport.requests.AuthorizedSession` + 直接 REST POST（`gmail_sync.py::build_people/add_contact`），requests 读环境变量代理、httplib2 不读
 - **安全铁律**（`references/compliance-rules.md`）：只加联系人+备注，绝不自动发邮件；备注格式 `{国家} {main_id} {企业名} #{n}`
-- **同步机制**：`queue_gmail_contacts` 把「有邮箱」企业标 pending → `sync_all` 逐条 `createContact` → `mark_gmail_contact` UPSERT（synced/failed）。幂等可重试：synced 跳过，failed/pending 下次点按钮续
-- **联系人分组**：同步成功按「批次 + 每组≤50」自动归入 skill1~skillN（满50换组、新批次从新组开始，不混批次）。历史 334 条已拆成 skill1~8。⚠️ `members:modify` 重复添加已存在成员会 409，`add_contacts_to_group` 已处理（409 降级逐个、跳过已存在）
-- **CLI**：`python scripts/gmail_sync.py authorize|status|sync [main_id] [--dry-run]|skill`（`skill` = 历史 synced 按批次拆组，一次性）
+- **同步机制**：`queue_gmail_contacts` 把「有邮箱」企业标 pending → `sync_all` 逐条 `createContact` → `mark_gmail_contact` UPSERT（synced/failed）。幂等可重试：synced 跳过，failed/pending 下次点按钮续。**无效邮箱（email_anomalies 里 email 非空 + open）同步时自动跳过**
+- **联系人分组（按企业归组，同一企业不拆组）**：`assign_by_company` 按 main_id 归组，同一企业所有邮箱进同一 skill 分组；组容量 ≤50 但不拆企业。`gmail_contacts.skill_group` 持久化企业→组映射，跨次 sync 新邮箱补进原组（本地无记录的历史企业用 People API `memberships` 反查）。历史 334 条已拆 skill1~8。⚠️ `members:modify` 重复添加已存在成员会 409，`add_contacts_to_group` 已处理（409 降级逐个、跳过已存在）
+- **CLI**：`python scripts/gmail_sync.py authorize|status|sync [main_id] [--dry-run]|skill|mark-invalid|clean-invalid`（`skill`=历史拆组一次性；`mark-invalid --email X --reason "bounce..." [--company-id MAINID]`=标记退信无效邮箱；`clean-invalid [--dry-run]`=硬删已 synced 的无效邮箱联系人）
 - **UI**：`/companies` 企业库页顶部 gmail-bar（同步按钮 + 去邮箱入口），卡片显示 已同步/未同步
 
 ## 长期完善方向（技术债 + 迭代项）
@@ -78,6 +80,7 @@
 - **正则提取规模信号（暂缓）**：曾想给 backfill.py 加正则自动判 `scale_tier`，实测官网措辞参差、误判漏判严重（Großhandel 是渠道不是规模、SolarV/New Power 措辞不同就漏）。**长期方向**：可探索「关键词定位 + LLM 读候选句判档」半自动，纯正则不可行。当前正道 = Claude 人工读 body 判档（见 `qualification-rules.md` 规模判断流程）。
 - **评分体系完善**：双模式四维是 v1。可迭代——触达「因地制宜」目前只写 rules、代码未自动判（德国电话降级靠人工）；规模「估」的边界可再收紧。
 - **获客渠道完善**：已跑通 Google Maps / 搜索 API / ENF 目录 / 列表页；展会名录、海关数据、品牌官网 find-a-distributor 待接入（见 `multi-source.md`）。
+- **事前识别无效邮箱（降低 bounce 踩雷概率）**：当前无效邮箱靠「事后 bounce → mark-invalid」黑名单，真正的 `User doesn't exist` 只能 bounce 才知道。可加两档事前降险：① 角色邮箱启发式——`przetargi@/zamowienia@/kadry@/sales@/info@` 等岗位邮箱失效风险高，同步时标「注意」或进待验证队列（不直接判无效，很多角色邮箱有效）；② MX 校验——域名无邮件服务器直接判无效。SMTP RCPT 探测最准但复杂/有风险，暂缓。
 - **brands_found 卖 vs 提及自动区分**：`score_leads.py` 的 `sells_deye` 是机械判断，比价平台列举品牌会误标「卖 Deye」。长期加「上下文语义判断」，当前靠 Claude 读 `brands_context` 手工复核 + 异常公司 WebSearch 交叉验证（双向教训见 `qualification-rules.md`）。
 - **兜底分工观察（每天探究）**：德国 50 家实测，兜底 9 家**全部落到 WebSearch**——kitesurf 抓官网超时（Krannich 10s timeout）、anysearch 一次没派上用场。每天兜底时留意记录：① kitesurf 超时是反爬还是 timeout 参数太短（要不要调 `wait_until`/timeout）；② anysearch 是「批量场景没出现」还是「效果不达预期」；③ WebSearch 成兜底主力是否合理（德国公司站大多可搜到）。积累样本后再决定是否调兜底分工。
 
