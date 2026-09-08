@@ -19,6 +19,8 @@
 - **2026-09-08**
   - **去重机制修复（同公司多域名裂成两条，task_issues #10）**：Alians OZE 主站(alians-oze.pl)+商城(alians-shop.pl)同一次入库被拆成两条 new(LDPL-66d5d4ebc3 + LDPL-29fdf9d3c3)。根因：`core._find_existing` 去重键=domain(优先)+name_key(兜底)，两条 domain 不同、company_name 也不同(Google Maps 超长全名 vs 商城短名)，**两信号都失效**；邮箱后缀 @alians-oze.pl 铁证在手却未参与比对。修复：`core.py` 加 `_find_existing_by_email_suffix`——domain/name_key 都查不到时，用企业自有邮箱后缀反查（剔除免费邮箱域 `FREE_EMAIL_DOMAINS`），命中走 diff 审核而非误判 new。测试 `D:/Agent/tmp/test_dedup.py` PASS（主站 new=1 → 商城 diff=1）。⚠️ 语言子域归一化（en./pl./www.）仍待办，与本兜底互补。
   - **Alians OZE 合并重复卡 + 漏判修正**：商城 LDPL-29fdf9d3c3 并入主站 LDPL-66d5d4ebc3（scale 继承 mid，4 邮箱 3 品牌 Deye/Fronius/FoxESS 取并集）；产品匹配漏判 0 分修正（Deye 经 Heckman 认证在售 → sells_deye=1，43C→92A），提重点关注客户。
+- **2026-09-09**
+  - **merge_leads.py 三层去重升级（同公司多域名归并，承接 09-08 ingest 层修复）**：① 修字段透传 bug——`merged.append` 7→13 字段，email/country/customer_type/address/profile_url/source_url 之前被丢（这就是「merge 阶段无邮箱」的真相，enf 源本有邮箱）；② 去重键升级——L0 domain + L1 邮箱后缀（企业自有域，剔除 `FREE_EMAIL_DOMAINS` 免费域）+ name 兜底自动合并，L2 电话相同只标疑似（`suspected_dups.csv`）不自动合并（加盟/黄页共用有小概率误杀，留人工），L3 公司名相似度暂不实现（误杀风险高，待设计停用词表+阈值）；③ email/phone 多值取并集，其余非空互补。测试 `D:/Agent/tmp/test_merge.py` PASS。⚠️ Alians 主站(gmaps无邮箱)vs商城(enf有邮箱)数据不对称场景 merge 层仍拦不住，真正兜底靠 ingest 层邮箱后缀（09-08 已修）。
 - **2026-09-07**
   - **数据清洗**：删 25 家噪声企业（JUNK_HOSTS，JSON 导出 + DB 备份）→ 378 家；清 4 家垃圾邮箱（20 条）；修 26 家标题污染企业名（NAME_FIX）。脚本 `scripts/clean_data.py`（--dry-run 预览）。
   - **企业邮箱(Gmail)集成 + UI 整合**：绑定 `hsh@wccsolar.es`，OAuth 授权完成（refresh token 落 `data/gmail_token.json`）。踩坑：googleapiclient 默认 httplib2 对 HTTP 代理 https 隧道有 bug（WinError 10060），改 `requests AuthorizedSession` + 直接 REST POST。同步按钮整合进企业库页（去独立 `/gmail` 页，旧 URL 跳转企业库），卡片显示 已同步/未同步，顶部 gmail-bar 加「去邮箱」入口。
