@@ -2,6 +2,8 @@
 
 线索从「Google Maps 抓取」到「A/B/C 分级」经过三关：**初筛 → 背调 → 评分**。
 
+> 📌 **规则检索方式**：下方每条 `⚠️` 规则都带 `【触发：...】` 标签。背调/评分遇到对应场景时，按触发条件（如「brands_found 空」）grep 本文件即可精确命中，不用通读全文。
+
 ## 一、初筛规则（读 CSV 后先过滤）
 
 `fetch_gmaps.py` 输出的 CSV 含噪声，先按以下规则淘汰，不进入背调：
@@ -32,9 +34,9 @@ python scripts/backfill.py leads.csv --out backfill.json \
   --brands "Deye,Sunsynk,Sol-Ark,INGE,Fusion,OHm,Noark,Huawei,Sungrow,GoodWe,Fronius,SMA,Solax,Sofar,Growatt,Kostal,SolarEdge,Enphase,Hoymiles,FoxESS,Solis"
 ```
 
-> ⚠️ **`--brands` 必须三组都传**：只传我方品牌 → `brands_found` 要么命中 Deye（存量 30）、要么空（0），竞品增量 24 档永远触发不了（德国实测 13 家大型批发商卖华为/阳光但产品匹配全 0）。
+> ⚠️【触发：跑 backfill 传 --brands 时】 **`--brands` 必须三组都传**：只传我方品牌 → `brands_found` 要么命中 Deye（存量 30）、要么空（0），竞品增量 24 档永远触发不了（德国实测 13 家大型批发商卖华为/阳光但产品匹配全 0）。
 
-> ⚠️ 脚本已用 `networkidle` 等待 JS 渲染——电商站（Shopify/Magento）的品牌列表常靠 JS 动态加载，若用 `domcontentloaded` 会漏抓（实测 HDM Solar 首页：domcontentloaded 时 Sunsynk=0，networkidle 后=5）。
+> ⚠️【触发：品牌列表抓不到/为空时】 脚本已用 `networkidle` 等待 JS 渲染——电商站（Shopify/Magento）的品牌列表常靠 JS 动态加载，若用 `domcontentloaded` 会漏抓（实测 HDM Solar 首页：domcontentloaded 时 Sunsynk=0，networkidle 后=5）。
 
 ### 判断层（Claude 现场）
 
@@ -46,13 +48,15 @@ Claude 读 `backfill.json`，按优先级判断：
 | 渠道类型 | 官网自述 distributor / wholesaler / Großhandel / 有批发板块；或只是 installer / 安装商 |
 | 公司规模 | 经营痕迹：官网自述 wholesale/distribution、代理几个品牌、有无仓储/物流描述、Google Maps 评分数（≈经营久）。**不看精确员工数**（长尾拿不到） |
 
-> ⚠️ `brands_found` 命中只是「提到该品牌」，要结合 `brands_context` 上下文判断是「作为经销商在销售」还是「作为竞品被提及」。判断不了标「未确认」。
+> ⚠️【触发：brands_found 空 + body 有自有品牌产品词】 **`brands_found` 为空 ≠ 无产品证据——先甄别「自有品牌生产商(own_brand)」**：官网没命中第三方品牌，但 body 里全是自有品牌逆变器/储能/电池（如 Volt Polska 的 Sinus Pro Ultra / ULTRA-5 储能），这是**同行生产商/进口商**，不是「会买我方品牌的下游渠道」。要跟「真无产品证据」（官网压根没光伏产品）区分开：own_brand 有产品（自有的），却既不给存量 30（不卖我方）也不给增量 24（不卖竞品）——它的正确去向是 `product_tier=own_brand`，渠道维度**不能**按「批发/分销商」给 25（它是生产商不是经销商），最终不进「潜在客户」，应归「黑名单(同行/竞品)」。实测 Volt Polska：brands_found 空→产品匹配 0，但渠道 25+规模 25 硬凑 70 B，把同行生产商当成了待开发渠道。
+
+> ⚠️【触发：brands_found 命中任何品牌时】 `brands_found` 命中只是「提到该品牌」，要结合 `brands_context` 上下文判断是「作为经销商在销售」还是「作为竞品被提及」。判断不了标「未确认」。
 >
-> ⚠️ **`score_leads.py` 的 `sells_deye` 是机械判断**（`brands_found` 含我方品牌即算 `sells_deye=True`），**无法自动区分「销售」vs「提及」**——比价平台/信息站在品牌列表里列举 Deye 会被误标成「卖 Deye」。落盘前 Claude 必须读 `brands_context` 复核：产品页/产品线/「authorized distributor / partner / Gold-Level Sales Partner」= 销售；品牌列表/比价/资讯站 = 提及，手工降级。
+> ⚠️【触发：brands_found 含我方品牌（sells_deye=true）时】 **`score_leads.py` 的 `sells_deye` 是机械判断**（`brands_found` 含我方品牌即算 `sells_deye=True`），**无法自动区分「销售」vs「提及」**——比价平台/信息站在品牌列表里列举 Deye 会被误标成「卖 Deye」。落盘前 Claude 必须读 `brands_context` 复核：产品页/产品线/「authorized distributor / partner / Gold-Level Sales Partner」= 销售；品牌列表/比价/资讯站 = 提及，手工降级。
 >
-> ⚠️ **片段不足以定「销售 vs 提及」，异常公司要 WebSearch 交叉验证**：`brands_context` 只给品牌词前后约 100 字片段，不足以判断整站性质。实测 Solarscouts——我凭一个品牌列表片段判成「比价平台、Deye 是提及非销售」，WebSearch 一查才发现它是电商、Deye 电池/逆变器真在售（有价）。**双向都可能错**：机械判断会把比价站误标成「卖 Deye」，人工读片段也可能把电商误判成「提及」。品牌命中但整站性质存疑（片段像列表页/比价页）时，必须 WebSearch 搜「公司名 + brand + price / buy / shop」交叉验证后再定档。
+> ⚠️【触发：品牌命中但整站性质存疑（片段像列表/比价页）时】 **片段不足以定「销售 vs 提及」，异常公司要 WebSearch 交叉验证**：`brands_context` 只给品牌词前后约 100 字片段，不足以判断整站性质。实测 Solarscouts——我凭一个品牌列表片段判成「比价平台、Deye 是提及非销售」，WebSearch 一查才发现它是电商、Deye 电池/逆变器真在售（有价）。**双向都可能错**：机械判断会把比价站误标成「卖 Deye」，人工读片段也可能把电商误判成「提及」。品牌命中但整站性质存疑（片段像列表页/比价页）时，必须 WebSearch 搜「公司名 + brand + price / buy / shop」交叉验证后再定档。
 >
-> ⚠️ **竞品增量 24 不只看 `brands_found` 品牌名**：德国光伏批发商的品牌列表大量是 JS 动态加载 / 图片品牌墙 / 德语路径（`/marken`、`/hersteller`），backfill 抓不到品牌名——但 body 明写「photovoltaik fachgroßhandel / wechselrichter / speicher」的，是明确的光伏渠道大鱼（实测 MD Enrgy / SchmitzSolar / Solar Depot / VEH Solar / Lanergy 都这样）。**品牌名抓不到 ≠ 不卖竞品**。产品匹配判「卖竞品品类」时，Claude 必须读 body 自述，不能只看 `brands_found` 空就给 0 分。
+> ⚠️【触发：brands_found 空/少 + body 有品类词（fachgroßhandel/wechselrichter 等）时】 **竞品增量 24 不只看 `brands_found` 品牌名**：德国光伏批发商的品牌列表大量是 JS 动态加载 / 图片品牌墙 / 德语路径（`/marken`、`/hersteller`），backfill 抓不到品牌名——但 body 明写「photovoltaik fachgroßhandel / wechselrichter / speicher」的，是明确的光伏渠道大鱼（实测 MD Enrgy / SchmitzSolar / Solar Depot / VEH Solar / Lanergy 都这样）。**品牌名抓不到 ≠ 不卖竞品**。产品匹配判「卖竞品品类」时，Claude 必须读 body 自述，不能只看 `brands_found` 空就给 0 分。
 
 ### 兜底：官网拿不到品牌 / 规模证据时
 
@@ -69,19 +73,19 @@ Claude 读 `backfill.json`，按优先级判断：
 - **批量**（几十条线索一起补证据）→ 用 **anysearch**（`anysearch extract` 有正文提取，一次拿干净正文，比 WebSearch 摘要 + 二次 WebFetch 省 token）
 - **零星**（1-2 条）→ 用 **WebSearch**（够用，无需额外 key）
 
-> ⚠️ 兜底搜到的证据同样要落到 `source_url`；判断不了仍标「未确认」，不脑补。
+> ⚠️【触发：用兜底手段补证据时】 兜底搜到的证据同样要落到 `source_url`；判断不了仍标「未确认」，不脑补。
 
 ## 三、双模式评分（各总分 100）
 
 同一批线索跑两套评分，UI 里可切换。核心区别：**头部模式啃大客户（规模看绝对大小，越大越高），长尾模式铺中小客户（规模看开发性价比，中＞小＞大）**。每张卡列出评分依据。
 
-> ⚠️ **Deye 是评分加分项，不是抓取筛选标准**：抓取阶段按品类广撒网（储能/逆变器/组件），不按品牌过滤；背调后 Deye（含贴牌）命中 = 产品匹配高分（存量），卖竞品 = 次之（增量）。
+> ⚠️【触发：生成抓取搜索词时】 **Deye 是评分加分项，不是抓取筛选标准**：抓取阶段按品类广撒网（储能/逆变器/组件），不按品牌过滤；背调后 Deye（含贴牌）命中 = 产品匹配高分（存量），卖竞品 = 次之（增量）。
 
 ### 头部模式（啃大客户）
 
 | 维度 | 权重 | 评分标准 |
 |------|------|---------|
-| 产品匹配 | 30 | 卖 Deye/贴牌=30（存量）· 卖竞品储能/逆变器=24（增量）· 无逆变器/储能证据=0 |
+| 产品匹配 | 30 | 卖 Deye/贴牌=30（存量）· 卖竞品储能/逆变器=24（增量）· 无逆变器/储能证据=0 · **自有品牌生产商(own_brand)=0（同行，渠道分也不给，见上）** |
 | 渠道匹配 | 25 | 批发/分销商 25 · 安装商 15 · 零售 0 |
 | 公司规模 | 25 | 大型 25 · 中型 17 · 小型 8（越大越高） |
 | 触达 | 20 | 电话(可加WhatsApp) 20 · 邮箱 14 · 仅官网 8（因地制宜，见下） |
@@ -105,9 +109,9 @@ Claude 读 `backfill.json`，按优先级判断：
 | 中型 | 区域批发、代理 2-3 品牌、有独立仓库描述、评分数中等 |
 | 小型 | 本地安装/零售、单一品牌、无仓储描述、评分数少 |
 
-> ⚠️ **三态防幻觉**：只有硬证据（仓库/多品牌/评分数等经营痕迹）才给确定档位；否则标「估」（背调过但无硬证据）或「未确认 → 中性分」（未背调）——**不归零、不把批量占位默认值包装成确定判断**。Google Maps 批量抓的安装商若没逐个背调，规模就是未确认中性分，重点客户需补背调核实。
+> ⚠️【触发：规模判档时】 **三态防幻觉**：只有硬证据（仓库/多品牌/评分数等经营痕迹）才给确定档位；否则标「估」（背调过但无硬证据）或「未确认 → 中性分」（未背调）——**不归零、不把批量占位默认值包装成确定判断**。Google Maps 批量抓的安装商若没逐个背调，规模就是未确认中性分，重点客户需补背调核实。
 
-> ⚠️ **Großhandel / distributor 是「渠道类型」，不是「规模」**：官网写「Großhandel / wholesaler / distributor」只能判渠道分，不能据此判规模档。规模三档看的是**仓库、代理品牌数、客户数、年限、团队、覆盖范围**这些经营痕迹硬信号——德国 50 家实测，一堆官网自称 Großhandel，规模从本地安装队到全国连锁批发都有，混在一起。
+> ⚠️【触发：官网写 Großhandel/wholesaler/distributor 时】 **Großhandel / distributor 是「渠道类型」，不是「规模」**：官网写「Großhandel / wholesaler / distributor」只能判渠道分，不能据此判规模档。规模三档看的是**仓库、代理品牌数、客户数、年限、团队、覆盖范围**这些经营痕迹硬信号——德国 50 家实测，一堆官网自称 Großhandel，规模从本地安装队到全国连锁批发都有，混在一起。
 
 ### 规模判断流程（背调时照做）
 

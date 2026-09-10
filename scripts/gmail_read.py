@@ -10,6 +10,7 @@
   python scripts/gmail_read.py authorize            # 首次：浏览器授权（只读），存 data/gmail_read_token.json
   python scripts/gmail_read.py replies              # 查昨天群发 → 今天回复（默认昨天群发）
   python scripts/gmail_read.py replies --sent-date 2026/9/7   # 指定群发日
+  python scripts/gmail_read.py read --query "from:xxx@xx.com" --max 5   # 读邮件正文（Gmail 搜索语法）
 
 安全铁律：只读收件箱/已发送，绝不发邮件、不改任何邮件状态。
 """
@@ -177,10 +178,85 @@ def replies(sent_after, sent_before, inbox_after):
     return replies_hit
 
 
+def _b64url_decode(s):
+    """Gmail message body 的 base64url 解码（补 = 到 4 的倍数）。"""
+    import base64
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4)).decode("utf-8", errors="replace")
+
+
+def _extract_body(payload):
+    """递归提取 Gmail message payload 的 text/plain 正文（无纯文本时回退 html）。"""
+    if not payload:
+        return ""
+    mt = payload.get("mimeType", "")
+    data = (payload.get("body") or {}).get("data")
+    if mt == "text/plain" and data:
+        return _b64url_decode(data)
+    for p in payload.get("parts", []):
+        if p.get("mimeType") == "text/plain" and (p.get("body") or {}).get("data"):
+            return _b64url_decode(p["body"]["data"])
+    for p in payload.get("parts", []):
+        if p.get("parts") or p.get("mimeType", "").startswith("multipart/"):
+            txt = _extract_body(p)
+            if txt:
+                return txt
+    if mt == "text/html" and data:
+        return _b64url_decode(data)
+    return ""
+
+
+def read_mail(query="", max_results=10, show_body=True):
+    """读往来邮件正文（只读）。query 用 Gmail 搜索语法（from:/to:/subject:/newer_than: 等）。"""
+    creds = get_credentials(authorize_if_missing=True)
+    if not creds:
+        raise SystemExit("尚未授权，先跑：python scripts/gmail_read.py authorize")
+    session = build_session(creds)
+    base = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+    params = {"maxResults": max_results}
+    if query:
+        params["q"] = query
+    resp = session.get(base, params=params)
+    resp.raise_for_status()
+    msgs = resp.json().get("messages", [])
+    if not msgs:
+        print(f"没有匹配的邮件（query={query or '最近收件箱'}）")
+        return
+
+    def hdr(headers, name):
+        for h in headers:
+            if h.get("name", "").lower() == name.lower():
+                return h.get("value", "")
+        return ""
+
+    print(f"共 {len(msgs)} 封" + (f"（query: {query}）" if query else "（最近收件箱）"))
+    for m in msgs:
+        mid = m["id"]
+        r = session.get(f"{base}/{mid}", params={"format": "full"})
+        r.raise_for_status()
+        d = r.json()
+        payload = d.get("payload", {})
+        headers = payload.get("headers", [])
+        print("\n" + "=" * 64)
+        print(f"发件人: {hdr(headers, 'From')}")
+        print(f"收件人: {hdr(headers, 'To')}")
+        print(f"主题:   {hdr(headers, 'Subject')}")
+        print(f"时间:   {hdr(headers, 'Date')}")
+        if show_body:
+            body = _extract_body(payload)
+            print("-" * 64)
+            print(body if body.strip() else f"（无纯文本正文，摘要：{d.get('snippet', '')}）")
+        else:
+            print(f"摘要: {d.get('snippet', '')}")
+
+
 def main():
-    ap = argparse.ArgumentParser(description="查群发开发信回复（只读）")
-    ap.add_argument("cmd", choices=["authorize", "replies"], help="authorize=只读授权 / replies=查群发回复")
-    ap.add_argument("--sent-date", default="", help="群发日（YYYY/M/D 或 YYYY-M-D），默认昨天")
+    ap = argparse.ArgumentParser(description="查群发开发信回复 / 读邮件正文（只读）")
+    ap.add_argument("cmd", choices=["authorize", "replies", "read"],
+                    help="authorize=只读授权 / replies=查群发回复 / read=读邮件正文（--query 搜索）")
+    ap.add_argument("--sent-date", default="", help="replies: 群发日（YYYY/M/D 或 YYYY-M-D），默认昨天")
+    ap.add_argument("--query", default="", help="read: Gmail 搜索语法，如 from:xxx@xx.com / subject:inverter / newer_than:7d")
+    ap.add_argument("--max", dest="max_results", type=int, default=10, help="read: 最多读几封（默认 10）")
+    ap.add_argument("--no-body", action="store_true", help="read: 只看头/摘要，不读正文")
     args = ap.parse_args()
 
     if args.cmd == "authorize":
@@ -197,6 +273,8 @@ def main():
             return f"{d.year}/{d.month}/{d.day}"
 
         replies(_dstr(sent), _dstr(sent + timedelta(days=1)), _dstr(sent))
+    elif args.cmd == "read":
+        read_mail(query=args.query, max_results=args.max_results, show_body=not args.no_body)
 
 
 if __name__ == "__main__":

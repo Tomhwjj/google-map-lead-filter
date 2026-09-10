@@ -1,0 +1,152 @@
+{
+  "spec_version": "1.1.0",
+  "updated_at": "2026-09-10",
+  "db_path": "D:/Agent/git/google-map-lead-filter/data/leads.db",
+  "db_mode": "wal",
+  "_db_mode_note": "连接时设 PRAGMA journal_mode=WAL + busy_timeout=5000，缓解读写并发；仍保持单写者纪律（见 ownership）",
+
+  "ownership": {
+    "schema_owner": "Claude Code",
+    "data_writer": "WorkBuddy",
+    "rule": "Claude Code 拥有 leads.db 的 schema 与迁移（CREATE/ALTER/DROP）；WorkBuddy 只写下方 write_boundary 白名单字段，绝不碰迁移、绝不改表结构。",
+    "换池铁律": "客户池(companies.pool)与轨迹(pool_log) 100% 人工操作，WorkBuddy 不直接换池，只把「建议换池」写进 email_review 队列，由人工/Claude 审完再换。"
+  },
+
+  "enums": {
+    "pool": ["潜在客户(未联系)", "潜在客户(已取得联系)", "已用邮箱尝试联系", "重点关注客户", "黑名单客户", "老客户"],
+    "gmail_contacts.status": ["pending", "synced", "failed", "invalid"],
+    "email_anomalies.status": ["open", "resolved"],
+    "email_review.status": ["review", "applied", "ignored"],
+    "classification": ["bounce", "auto_reply", "spam", "closed", "normal_reply", "consumer_after_sale", "unrelated"]
+  },
+
+  "write_boundary": {
+    "email_review": {
+      "note": "主写表：每封邮件一条，附审计字段。低置信度/需人工判断的落 status=review 进队列",
+      "writable_fields": ["message_id", "from_address", "to_address", "subject", "mail_date", "body_snippet", "in_reply_to", "classification", "confidence", "rule_id", "matched_main_id", "matched_email", "proposed_action", "action_detail", "status", "created_at"]
+    },
+    "email_anomalies": {
+      "note": "仅 bounce 退信时新增一条无效邮箱记录",
+      "writable_fields": ["main_id", "email", "reason", "status"],
+      "readonly_fields": ["id", "task_id", "company_name", "country", "created_at", "resolved_at"]
+    },
+    "gmail_contacts": {
+      "note": "仅 bounce 退信时把该邮箱 status 改为 invalid",
+      "writable_fields": ["status", "error"],
+      "readonly_fields": ["id", "main_id", "email", "note", "contact_resource_name", "skill_group", "created_at", "synced_at"]
+    },
+    "forbidden": ["CREATE TABLE", "ALTER TABLE", "DROP", "companies 表任何字段(含 pool)", "pool_log 表任何字段", "tasks / diffs / market_tasks / country_scores / task_issues / email_accounts 任何字段"]
+  },
+
+  "new_table_email_review": {
+    "note": "本表由 Claude Code 在 db.py 的 SCHEMA 里新建（schema 归 Claude），WorkBuddy 不建表、只按此结构读写",
+    "columns": {
+      "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+      "message_id": "TEXT UNIQUE",
+      "from_address": "TEXT",
+      "to_address": "TEXT",
+      "subject": "TEXT",
+      "mail_date": "TEXT",
+      "body_snippet": "TEXT",
+      "in_reply_to": "TEXT",
+      "classification": "TEXT",
+      "confidence": "REAL",
+      "rule_id": "TEXT",
+      "matched_main_id": "TEXT",
+      "matched_email": "TEXT",
+      "proposed_action": "TEXT",
+      "action_detail": "TEXT",
+      "status": "TEXT DEFAULT 'review'",
+      "created_at": "TEXT",
+      "reviewed_at": "TEXT",
+      "reviewer": "TEXT"
+    },
+    "indexes": ["idx_email_review_status ON email_review(status)", "idx_email_review_main ON email_review(matched_main_id)"]
+  },
+
+  "audit_required": {
+    "note": "每次写 email_review 必须附带的审计字段，保证判断可抽查",
+    "fields": ["confidence(置信度0-1)", "body_snippet(命中的关键摘录,≤500字)", "rule_id(命中的规则编号)", "proposed_action", "action_detail"],
+    "低置信度": "confidence < 0.7 且 status=applied 时强制转 review（禁自动动作）；R3/R7 的 ignored 不受此限，conf ≥0.5 允许 ignored，<0.5 仍进 review"
+  },
+
+  "match_logic": {
+    "note": "发件人邮箱 → 企业 main_id 的匹配逻辑",
+    "steps": [
+      "from_address 去空格 + lowercase",
+      "在 gmail_contacts 表按 email 精确匹配(lowercase) → 得 main_id",
+      "匹配不到再查 companies.email(逗号分隔多值)是否包含该邮箱",
+      "还匹配不到 → 取邮箱域名后缀(如 @pivit.pl) → 反查 companies.domain 是否相等；仅唯一命中才算匹配，多命中/免费邮箱域(gmail.com 等)/公共域名后缀不匹配",
+      "都匹配不到 → matched_main_id=null，proposed_action=transfer_review，标记「陌生邮箱」"
+    ]
+  },
+
+  "self_sent_filter": {
+    "note": "前置拦截（分类后覆盖 R1-R6 任何命中）：from_address == email_accounts.account_email（被监控账号）→ 直接 R7/unrelated + ignored，conf=0.9。出站原件/群发副本非客户回复",
+    "source": "email_accounts 表 account_email 字段"
+  },
+
+  "classify_rules": [
+    {
+      "rule_id": "R1",
+      "label": "bounce",
+      "priority": 1,
+      "signals": "subject 含 Undelivered Mail Returned / Delivery Status Notification / failure notice / Returned mail，或 body 含 550 / 552 / 553 / User doesn't exist / no such user / mailbox unavailable / recipient address rejected",
+      "action": "mark_invalid：标的=extract_bounced_recipient 从正文提取的「被弹回收件人」（bounce 的 from 是 mailer-daemon，绝不可拿 from 标无效）；写 email_anomalies(新增) + 改 gmail_contacts.status=invalid",
+      "confidence_note": "信号强，通常高置信"
+    },
+    {
+      "rule_id": "R2",
+      "label": "auto_reply",
+      "priority": 2,
+      "signals": "subject 含 Out of Office / Automatic reply / 自动回复 / Auto:，或 body 含 out of office / vacation / holiday / away from",
+      "action": "no_action：写 email_review 记录即可，不改池不改状态",
+      "confidence_note": "高置信"
+    },
+    {
+      "rule_id": "R3",
+      "label": "spam",
+      "priority": 3,
+      "signals": "无 in_reply_to(不是我们群发的回复) + 纯推广/可疑链接/陌生群发",
+      "action": "ignored：写 email_review(status=ignored)",
+      "confidence_note": "中"
+    },
+    {
+      "rule_id": "R4",
+      "label": "closed",
+      "priority": 4,
+      "signals": "body 含 closed / no longer in business / 破产 / do not sell / we are producer not distributor / not interested / 不合作",
+      "action": "transfer_review：写 email_review(status=review)，建议人工归「黑名单客户」",
+      "confidence_note": "语义模糊，需 Claude 背调上下文复核，低置信"
+    },
+    {
+      "rule_id": "R5",
+      "label": "normal_reply",
+      "priority": 4,
+      "signals": "在回复我们群发(in_reply_to 有值) + 内容涉及产品询价/合作/要 catalog/报价/问库存",
+      "action": "transfer_review：写 email_review(status=review)，建议人工归「潜在客户(已取得联系)」",
+      "confidence_note": "中，需人工确认换池"
+    },
+    {
+      "rule_id": "R6",
+      "label": "consumer_after_sale",
+      "priority": 4,
+      "signals": "个人邮箱(非企业域名) + 问单台产品安装/退货/价格，非 B2B 批量询盘",
+      "action": "transfer_review：写 email_review(status=review)，非经销商线索",
+      "confidence_note": "低，需复核"
+    },
+    {
+      "rule_id": "R7",
+      "label": "unrelated",
+      "priority": 5,
+      "signals": "兜底：与业务无关、错发、无法归类",
+      "action": "ignored",
+      "confidence_note": "低"
+    }
+  ],
+
+  "review_flow": {
+    "note": "Claude Code / 人工 后续扫 email_review 里 status=review 的行，逐条审：确认换池走 core.change_pool、确认 invalid 走 core.mark_email_invalid、确认误判改 status=ignored",
+    "接口": "core.change_pool(main_id, to_pool, operator, note) / core.mark_email_invalid(email, reason, main_id) / core.record_issue(...)"
+  }
+}

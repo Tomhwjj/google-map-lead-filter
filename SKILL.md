@@ -89,6 +89,7 @@ python scripts/backfill.py leads.csv --out backfill.json \
 
 2. 读 `backfill.json`，逐条判断：**品牌匹配（核心，`brands_found` 是否命中我方品牌）+ 上下文确认在销售而非仅提及**、渠道类型、公司规模、近期动态。优先读 body 判品牌/规模；官网抓不动用 **kitesurf** 兜底；品牌/规模证据缺失用 **anysearch（批量）/ WebSearch（零星）** 搜「公司名 + 品牌名 + distributor」或「公司名 + wholesale/warehouse/about」补证据（兜底分工见 `references/qualification-rules.md`）。
 3. 用 WebSearch 搜「公司名 + linkedin」补 LinkedIn 链接。
+4. **规则检索**：背调遇场景时，按 `references/qualification-rules.md` 的 `【触发：...】` 标签 grep 精确命中规则（如「brands_found 空」→ own_brand 甄别 / 竞品增量两条），不用通读全文。
 
 ### 第七步：双模式评分 + 分级
 
@@ -99,6 +100,13 @@ python scripts/score_leads.py leads_final.json --out leads_scored.json
 ```
 
 评分口径、每维权重、打分标准、三态防幻觉规则**全部以 `references/qualification-rules.md` 为唯一来源**（SKILL.md 不重复具体数字，避免两处漂移）。A级 80-100 / B级 50-79 / C级 0-49。
+
+> 🔁 **评分收尾必做（每次背调+评分完照做，不靠「记得」）**：过程中发现的新盲区 / 误判 / 规则漏洞，**当场落盘**，不能只改数据了事：
+> 1. 数据/判定错误 → `core.record_issue(task_id, category, title, detail, solution)` 落 `task_issues`（例：#12 own_brand 误判）。
+> 2. 属于「规则盲区」（以后还会犯）→ 提炼成 `references/qualification-rules.md` 一条规则，**带 `【触发：...】` 标签 + 真实案例（main_id）**。
+> 3. 改完更新 `HANDOFF.md` 改动记录，并同步到 `~/.agents/skills` 和 `~/.claude/skills` 两个 skill 目录。
+>
+> 教训：Volt Polska 被误判 70 B（同行生产商当渠道），改完字段差点忘了落库被质问——「发现问题要记录」不能靠元意识，要靠流程这一步强制。
 
 ### 第八步：输出表格 + UI 报告
 

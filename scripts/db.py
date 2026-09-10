@@ -3,7 +3,7 @@
 """
 数据层：SQLite 企业库（本地私有化获客系统的持久化底座）。
 
-11 张表：
+12 张表：
   companies       — 企业主表（main_id 主键，全字段 + 客户池 pool + 时间戳轨迹）
   tasks           — 获客任务表（task_id 主键，起止时间戳 / 时长 / 关键词快照 / 数据源清单）
   task_companies  — 任务 ↔ 企业关联（task_id + main_id，action: new/dup/diff）
@@ -15,6 +15,7 @@
   email_accounts  — 绑定企业邮箱账号（Gmail/Workspace，OAuth token 存 data/gmail_token.json）
   gmail_contacts  — 企业邮箱 → Google 联系人同步轨迹（备注=国家+主码+企业名+n）
   email_anomalies — 邮箱异常记录（无邮箱：获客没拿到邮箱 → 分析原因；无效邮箱：bounce 退信 → 记失效邮箱+原因，同步时过滤）
+  email_review   — 邮件处理结果 + 审计 + review 队列（WorkBuddy 写，Claude/人工审；契约见 spec.json）
 
 被 core.py / webapp 共用；也可直接跑初始化：
     python db.py                 # 用默认库路径初始化
@@ -199,7 +200,7 @@ CREATE TABLE IF NOT EXISTS gmail_contacts (
     email                  TEXT,
     note                   TEXT,          -- 备注：{国家} {主码} {企业名} #{n}
     contact_resource_name  TEXT,          -- people/{id}
-    skill_group            TEXT,          -- 归入的 skill 分组 resourceName（contactGroups/xxx），保证同企业不拆组
+    skill_group            TEXT,          -- 归入的分组友好名（skill1/已回复/游离），保证同企业不拆组
     status                 TEXT DEFAULT 'pending',  -- pending / synced / failed / invalid
     error                  TEXT,
     synced_at              TEXT,
@@ -228,15 +229,44 @@ CREATE TABLE IF NOT EXISTS email_anomalies (
 
 CREATE INDEX IF NOT EXISTS idx_email_anomalies_main ON email_anomalies(main_id);
 CREATE INDEX IF NOT EXISTS idx_email_anomalies_status ON email_anomalies(status);
+
+-- 邮件处理结果 + 审计 + review 队列（WorkBuddy 写，Claude/人工审）
+-- 契约见 spec.json：每封邮件一条，附审计字段，低置信度/需人工判断落 status=review
+CREATE TABLE IF NOT EXISTS email_review (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id       TEXT UNIQUE,
+    from_address     TEXT,
+    to_address       TEXT,
+    subject          TEXT,
+    mail_date        TEXT,
+    body_snippet     TEXT,
+    in_reply_to      TEXT,
+    classification   TEXT,
+    confidence       REAL,
+    rule_id          TEXT,
+    matched_main_id  TEXT,
+    matched_email    TEXT,
+    proposed_action  TEXT,
+    action_detail    TEXT,
+    status           TEXT DEFAULT 'review',
+    created_at       TEXT,
+    reviewed_at      TEXT,
+    reviewer         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_review_status ON email_review(status);
+CREATE INDEX IF NOT EXISTS idx_email_review_main ON email_review(matched_main_id);
 """
 
 
 def get_conn(db_path=None):
-    """获取连接（自动建 data/ 目录）。"""
+    """获取连接（自动建 data/ 目录，开 WAL + busy_timeout 缓解并发写）。"""
     db_path = db_path or DEFAULT_DB
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=5)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 

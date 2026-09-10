@@ -29,6 +29,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -262,6 +263,18 @@ def _contact_skill_group(session, resource, group_names=None):
     return None
 
 
+def _group_resource_by_name(session, name, group_names):
+    """友好分组名（skill1/已回复/…）→ resourceName。反查现有分组；找不到则创建。"""
+    if not name:
+        return None
+    if name.startswith("contactGroups/"):
+        return name
+    for rn, nm in group_names.items():
+        if nm == name:
+            return rn
+    return get_or_create_group(session, name)
+
+
 def assign_by_company(session, conn, company_resources):
     """按企业归组：同一企业的联系人必须进同一 skill 分组（组容量≤50，不拆企业）。
 
@@ -269,51 +282,57 @@ def assign_by_company(session, conn, company_resources):
       本地已有分组的企业 → 新邮箱补进原组；
       本地无记录但已有联系人的企业 → People API 反查历史分组补进（跨次 sync 不拆）；
       全新企业 → 装进当前组，装满 50 开新组。
-    写回 gmail_contacts.skill_group。返回归入条数。
+    skill_group 字段存友好名（skill1/已回复/…），便于企业详情直接展示。
+    返回归入条数。
     """
     company_resources = {k: [r for r in v if r] for k, v in company_resources.items()}
     company_resources = {k: v for k, v in company_resources.items() if v}
     if not company_resources:
         return 0
 
-    # 本地已知分组：main_id -> group resourceName
+    # 本地已知分组（友好名）：main_id -> 友好名
     known = {}
     for r in conn.execute(
         "SELECT main_id, skill_group FROM gmail_contacts "
         "WHERE skill_group IS NOT NULL AND skill_group != ''").fetchall():
         known.setdefault(r["main_id"], r["skill_group"])
 
-    group_names = None  # 懒加载 contactGroups 名字映射
-    cur_group = None
+    group_names = _skill_group_names(session)   # {resourceName: name}
+    cur_group_res = None
+    cur_group_label = None
     cur_used = 0
     next_num = _max_skill_group_num(session) + 1
     total = 0
 
     for main_id, resources in company_resources.items():
-        group = known.get(main_id)
-        if not group:
+        label = known.get(main_id)                    # 友好名
+        group_res = _group_resource_by_name(session, label, group_names) if label else None
+        if group_res is None:
+            # 本地无记录 → 反查历史分组（跨次 sync 不拆）
             row = conn.execute(
                 "SELECT contact_resource_name FROM gmail_contacts "
                 "WHERE main_id=? AND status='synced' AND contact_resource_name IS NOT NULL "
                 "AND contact_resource_name != '' LIMIT 1", (main_id,)).fetchone()
             if row:
-                if group_names is None:
-                    group_names = _skill_group_names(session)
-                group = _contact_skill_group(session, row["contact_resource_name"], group_names)
-        if not group:
+                group_res = _contact_skill_group(session, row["contact_resource_name"], group_names)
+                if group_res:
+                    label = group_names.get(group_res) or label
+        if group_res is None:
             # 全新企业：装进当前组，装不下开新组
-            if cur_group is None or cur_used + len(resources) > 50:
-                cur_group = get_or_create_skill_group(session, next_num)
+            if cur_group_res is None or cur_used + len(resources) > 50:
+                cur_group_label = f"skill{next_num}"
+                cur_group_res = get_or_create_skill_group(session, next_num)
                 next_num += 1
                 cur_used = 0
-            group = cur_group
+            group_res = cur_group_res
+            label = cur_group_label
             cur_used += len(resources)
 
-        cnt = add_contacts_to_group(session, group, resources)
+        cnt = add_contacts_to_group(session, group_res, resources)
         total += cnt
         for res in resources:
             conn.execute("UPDATE gmail_contacts SET skill_group=? WHERE contact_resource_name=?",
-                         (group, res))
+                         (label, res))
     conn.commit()
     return total
 
@@ -534,7 +553,7 @@ def split_skill_groups(db_path=None, dry_run=False):
         total += n
         for rname in res:
             conn2.execute("UPDATE gmail_contacts SET skill_group=? WHERE contact_resource_name=?",
-                          (grp, rname))
+                          (name, rname))
         print(f"✓ {name}: 归入 {n} 条")
     conn2.commit()
     conn2.close()
@@ -544,6 +563,91 @@ def split_skill_groups(db_path=None, dry_run=False):
         print(f"⚠️ 未找到原分组「{GROUP_NAME}」（可能已删或改名）")
     print(f"✓ 完成：{total} 条拆入 {len(plan)} 组")
     return total
+
+
+def backfill_skill_groups(db_path=None, delay=0.5):
+    """反查已同步联系人在 Gmail 的实际分组，回填 skill_group（友好名）。
+
+    解决历史数据 skill_group 全空、Gmail 端移组/删除不回写导致的本地↔云端脱节：
+      - 属 skill1~skillN → 存 'skillN'
+      - 属其它具名自定义组（如「已回复」）→ 存该组名
+      - 不在任何具名分组 → 存 '游离'
+      - 404（已从 Gmail 删除）→ status 改 invalid，error='已从 Gmail 删除'
+    只处理 skill_group 为空的行（幂等，可反复跑补漏）；每次调用间 sleep delay 秒，
+    429 限流自动退避重试。返回 {backfilled, special, dangling, deleted, skipped429}。
+    """
+    conn = init_db(db_path)
+    creds = get_credentials()
+    if not (creds and creds.valid):
+        conn.close()
+        raise SystemExit("尚未授权，先跑：python scripts/gmail_sync.py authorize")
+    session = build_people(creds)
+    group_names = _skill_group_names(session)   # {resourceName: name}
+    _SYSTEM_GROUPS = {"myContacts", "all", "friends", "family", "coworkers",
+                      "chatBuddies", "starred", "blocked", ""}
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, main_id, email, contact_resource_name FROM gmail_contacts "
+        "WHERE status='synced' AND contact_resource_name IS NOT NULL "
+        "AND contact_resource_name != '' "
+        "AND (skill_group IS NULL OR skill_group = '')").fetchall()]
+
+    def fetch_memberships(res, retries=3):
+        """反查某联系人的 memberships，429 限流退避重试。返回 group resourceName 列表。"""
+        last_err = None
+        for attempt in range(retries):
+            try:
+                m = session.get(f"https://people.googleapis.com/v1/{res}",
+                                params={"personFields": "memberships"})
+                m.raise_for_status()
+                return [x["contactGroupMembership"]["contactGroupResourceName"]
+                        for x in m.json().get("memberships", [])
+                        if x.get("contactGroupMembership", {}).get("contactGroupResourceName")]
+            except Exception as e:
+                st = getattr(getattr(e, "response", None), "status_code", None)
+                last_err = e
+                if st == 429 and attempt < retries - 1:
+                    time.sleep(2.0 + attempt * 2.0)
+                    continue
+                break
+        raise last_err
+
+    backfilled = special = dangling = deleted = skipped429 = 0
+    for r in rows:
+        try:
+            mems = fetch_memberships(r["contact_resource_name"])
+            named = [group_names.get(gr, "") for gr in mems]
+            named = [n for n in named if n and n not in _SYSTEM_GROUPS]
+            skill = [n for n in named if re.match(r"^skill\d+$", n)]
+            if skill:
+                label = skill[0]
+                backfilled += 1
+            elif named:
+                label = named[0]
+                special += 1
+            else:
+                label = "游离"
+                dangling += 1
+            conn.execute("UPDATE gmail_contacts SET skill_group=? WHERE id=?",
+                         (label, r["id"]))
+        except Exception as e:
+            st = getattr(getattr(e, "response", None), "status_code", None)
+            if st == 404:
+                conn.execute(
+                    "UPDATE gmail_contacts SET status='invalid', skill_group=NULL, "
+                    "error='已从 Gmail 删除（404）' WHERE id=?", (r["id"],))
+                deleted += 1
+            elif st == 429:
+                skipped429 += 1
+                print(f"⚠️ {r['email']}: 429 限流，跳过（下次重跑）")
+            else:
+                print(f"⚠️ {r['email']}: {e}")
+        time.sleep(delay)
+    conn.commit()
+    conn.close()
+    print(f"回填完成：skill 分组 {backfilled} · 特殊分组 {special} · 游离 {dangling} "
+          f"· 已删除 {deleted} · 429跳过 {skipped429}")
+    return {"backfilled": backfilled, "special": special, "dangling": dangling,
+            "deleted": deleted, "skipped429": skipped429}
 
 
 def status(db_path=None):
@@ -565,8 +669,8 @@ def status(db_path=None):
 
 def main():
     ap = argparse.ArgumentParser(description="企业邮箱(Gmail)绑定 + 联系人自动同步")
-    ap.add_argument("cmd", choices=["authorize", "status", "sync", "skill", "mark-invalid", "clean-invalid"],
-                    help="authorize=首次授权 / status=状态 / sync=同步联系人 / skill=历史已同步按批次拆组(每组≤50) / mark-invalid=标记退信无效邮箱 / clean-invalid=硬删已同步的无效邮箱联系人")
+    ap.add_argument("cmd", choices=["authorize", "status", "sync", "skill", "mark-invalid", "clean-invalid", "backfill-groups"],
+                    help="authorize=首次授权 / status=状态 / sync=同步联系人 / skill=历史已同步按批次拆组(每组≤50) / mark-invalid=标记退信无效邮箱 / clean-invalid=硬删已同步的无效邮箱联系人 / backfill-groups=反查Gmail回填每个联系人的实际分组(友好名)")
     ap.add_argument("main_id", nargs="?", help="sync 时可选：只同步某企业 main_id")
     ap.add_argument("--dry-run", action="store_true", help="预览不落库/不调 API")
     ap.add_argument("--account", default="", help="绑定账号邮箱（authorize 后落 email_accounts）")
@@ -611,6 +715,8 @@ def main():
             raise SystemExit("尚未授权，先跑：python scripts/gmail_sync.py authorize")
         service = build_people(creds)
         remove_invalid_contacts(service, dry_run=args.dry_run)
+    elif args.cmd == "backfill-groups":
+        backfill_skill_groups()
 
 
 if __name__ == "__main__":

@@ -1014,6 +1014,97 @@ def get_invalid_email_set(db_path=None):
     return s
 
 
+# ---------------------------------------------------------------------------
+# 邮件处理 review 队列（WorkBuddy 对接，契约见 spec.json）
+# WorkBuddy 拉信 → 硬编码提取元数据 → LLM 机械分类 → 调本段函数写 email_review。
+# 换池/标无效仍 100% 人工（change_pool / mark_email_invalid 在 review 后由 Claude/人工调）。
+# ---------------------------------------------------------------------------
+
+def record_email_review(message_id, from_address="", to_address="", subject="",
+                        mail_date="", body_snippet="", in_reply_to="",
+                        classification="", confidence=None, rule_id="",
+                        matched_main_id=None, matched_email="",
+                        proposed_action="", action_detail="", status="review",
+                        db_path=None, **kwargs):
+    """UPSERT 一封邮件处理结果（按 message_id 幂等），自动补 created_at。
+
+    WorkBuddy 写 email_review 的入口；status 默认 'review'（需人工/Claude 审）。
+    审计铁律：confidence 非空且 < 0.7 时，禁止 status='applied'（自动动作），
+    强制落 'review' 留队列，防止低置信自动换池/标无效。返回 review 行 id。
+    **kwargs 吸收调用方多传的字段（如管线里的 matched_by），忽略不入库。
+    """
+    if not message_id:
+        raise ValueError("message_id 必填")
+    if confidence is not None and float(confidence) < 0.7 and status == "applied":
+        status = "review"  # 低置信禁自动 applied，强制人工审
+    conn = init_db(db_path)
+    now = now_iso()
+    conn.execute(
+        "INSERT INTO email_review (message_id, from_address, to_address, subject, "
+        "mail_date, body_snippet, in_reply_to, classification, confidence, rule_id, "
+        "matched_main_id, matched_email, proposed_action, action_detail, status, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(message_id) DO UPDATE SET "
+        "from_address=excluded.from_address, to_address=excluded.to_address, "
+        "subject=excluded.subject, mail_date=excluded.mail_date, "
+        "body_snippet=excluded.body_snippet, in_reply_to=excluded.in_reply_to, "
+        "classification=excluded.classification, confidence=excluded.confidence, "
+        "rule_id=excluded.rule_id, matched_main_id=excluded.matched_main_id, "
+        "matched_email=excluded.matched_email, proposed_action=excluded.proposed_action, "
+        "action_detail=excluded.action_detail, status=excluded.status",
+        (message_id, from_address, to_address, subject, mail_date, body_snippet,
+         in_reply_to, classification, confidence, rule_id, matched_main_id,
+         matched_email, proposed_action, action_detail, status, now))
+    conn.commit()
+    rid = conn.execute("SELECT id FROM email_review WHERE message_id=?",
+                       (message_id,)).fetchone()["id"]
+    conn.close()
+    return rid
+
+
+def list_email_review(status=None, limit=None, db_path=None):
+    """review 队列扫描（status: review/applied/ignored/None=全部），join 企业名。
+
+    Claude/人工扫 status='review' 的逐条审，确认换池/标无效后调 change_pool /
+    mark_email_invalid。按 created_at 倒序。"""
+    conn = init_db(db_path)
+    sql = ("SELECT er.*, c.company_name FROM email_review er "
+           "LEFT JOIN companies c ON er.matched_main_id=c.main_id")
+    conds, params = [], []
+    if status:
+        conds.append("er.status=?")
+        params.append(status)
+    if conds:
+        sql += " WHERE " + " AND ".join(conds)
+    sql += " ORDER BY er.created_at DESC, er.id DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    conn.close()
+    return rows
+
+
+def mark_contact_invalid(email, error=None, db_path=None):
+    """R1 bounce 退信：把 gmail_contacts 里该邮箱 status 改为 invalid。
+
+    只改 status + error，不动 note / skill_group（区别于 mark_gmail_contact 全字段
+    UPSERT 会重写备注/分组，不适合只标失效）。同邮箱在多个 main_id 下会全部标
+    invalid。返回 {email, updated}。"""
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        raise ValueError(f"非法邮箱: {email!r}")
+    conn = init_db(db_path)
+    cur = conn.execute(
+        "UPDATE gmail_contacts SET status='invalid', error=?, synced_at=NULL "
+        "WHERE lower(email)=?",
+        (error or "bounce", email))
+    conn.commit()
+    updated = cur.rowcount
+    conn.close()
+    return {"email": email, "updated": updated}
+
+
 # ---- 企业邮箱(Gmail/Workspace) 账号 + 联系人同步轨迹 ----
 
 def save_email_account(account_email, account_type="workspace", db_path=None):
