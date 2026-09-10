@@ -1085,6 +1085,26 @@ def list_email_review(status=None, limit=None, db_path=None):
     return rows
 
 
+def resolve_email_review(review_id, status="applied", reviewer="人工", db_path=None):
+    """人工审一条 email_review：写 status + reviewed_at + reviewer。
+
+    审核页确认换池/标无效/忽略后调本函数，把 review 行移出队列（落 applied/ignored）。
+    换池/标无效本身仍走 change_pool / mark_email_invalid，本函数只改 review 行的
+    审核状态（单一职责）。返回 {review_id, status, updated}。
+    """
+    if status not in ("review", "applied", "ignored"):
+        raise ValueError(f"非法 review status: {status}")
+    conn = init_db(db_path)
+    now = now_iso()
+    cur = conn.execute(
+        "UPDATE email_review SET status=?, reviewed_at=?, reviewer=? WHERE id=?",
+        (status, now, reviewer, review_id))
+    conn.commit()
+    updated = cur.rowcount
+    conn.close()
+    return {"review_id": review_id, "status": status, "updated": updated}
+
+
 def mark_contact_invalid(email, error=None, db_path=None):
     """R1 bounce 退信：把 gmail_contacts 里该邮箱 status 改为 invalid。
 

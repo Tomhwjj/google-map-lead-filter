@@ -37,10 +37,11 @@ from core import (RESEARCH_DIMS, build_report, change_pool, finish_research,
                   get_company, get_country_detail, get_research, get_email_account,
                   gmail_sync_stats, latest_research_ranking, list_companies,
                   list_countries, list_diff_groups, list_email_anomalies,
-                  list_gmail_contacts, list_pool_log, list_research,
+                  list_email_review, list_gmail_contacts, list_pool_log, list_research,
                   list_task_issues, list_tasks, pool_stats, resolve_email_anomaly,
-                  review_diff, save_country_score, save_email_account,
-                  scan_no_email_anomalies, start_research, start_task)
+                  resolve_email_review, review_diff, save_country_score,
+                  save_email_account, scan_no_email_anomalies, start_research,
+                  start_task)
 from db import POOLS, get_conn, init_db
 from render_task_report import render_md, render_report
 from render_research_report import (render_md as render_research_md,
@@ -306,6 +307,44 @@ def email_anomalies_scan():
 def email_anomalies_resolve(anomaly_id):
     resolve_email_anomaly(anomaly_id, resolved=True)
     return redirect(url_for("email_anomalies"))
+
+
+# review 分类中文标签 + 建议目标池（审核页展示/一键换池默认值；无建议=倾向忽略）
+_CLASS_LABEL = {
+    "bounce": "退信", "auto_reply": "自动回复", "spam": "垃圾邮件",
+    "closed": "已关闭/停业", "normal_reply": "正常回复(询价)",
+    "consumer_after_sale": "个人售后", "unrelated": "无关",
+}
+_SUGGEST_POOL = {"R4": "黑名单客户", "R5": "潜在客户(已取得联系)"}
+
+
+@app.route("/email-review", methods=["GET"])
+def email_review_list():
+    status = request.args.get("status", "review")
+    items = list_email_review(status=status or None)
+    for it in items:
+        it["label"] = _CLASS_LABEL.get(it.get("classification") or "",
+                                       it.get("classification") or "")
+        it["suggested_pool"] = _SUGGEST_POOL.get(it.get("rule_id") or "", "")
+    return render_template("email_review.html", items=items, status=status, pools=POOLS)
+
+
+@app.route("/email-review/<int:review_id>/resolve", methods=["POST"])
+def email_review_resolve(review_id):
+    action = (request.form.get("action") or "").strip()
+    reviewer = (request.form.get("reviewer") or "人工(webui)").strip()
+    if action == "pool":
+        to_pool = (request.form.get("to_pool") or "").strip()
+        main_id = (request.form.get("main_id") or "").strip()
+        note = (request.form.get("note") or "").strip()
+        if main_id and to_pool:
+            change_pool(main_id, to_pool, operator=reviewer, note=note)
+        resolve_email_review(review_id, status="applied", reviewer=reviewer)
+    elif action == "ignore":
+        resolve_email_review(review_id, status="ignored", reviewer=reviewer)
+    else:
+        resolve_email_review(review_id, status="applied", reviewer=reviewer)
+    return redirect(url_for("email_review_list", status="review"))
 
 
 @app.route("/research", methods=["GET"])

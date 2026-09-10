@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}邮件审核{% endblock %}
+{% block content %}
+<h1>邮件审核队列</h1>
+<p class="hint">WorkBuddy 自动拉信分类后，低置信度（conf&lt;0.7）或建议换池的邮件落这里人工扫。<b>换池 / 标无效 100% 人工确认</b>：确认询价 → 换「已取得联系」；停业/自有品牌 → 换「黑名单」；误判/垃圾 → 忽略。</p>
+
+{% if request.args.get('msg') %}
+<p class="hint" style="color:#16a34a;">{{ request.args.get('msg') }}</p>
+{% endif %}
+
+<div class="row">
+  <span style="align-self:center;">
+    <a href="{{ url_for('email_review_list', status='review') }}" class="btn" style="{{ 'opacity:.5;' if status != 'review' }}">待审核</a>
+    <a href="{{ url_for('email_review_list', status='applied') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);{{ 'opacity:.5;' if status != 'applied' }}">已处理</a>
+    <a href="{{ url_for('email_review_list', status='ignored') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);{{ 'opacity:.5;' if status != 'ignored' }}">已忽略</a>
+    <a href="{{ url_for('email_review_list', status='') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);">全部</a>
+  </span>
+</div>
+
+<h2>队列（{{ items | length }}）</h2>
+{% if items %}
+<table>
+  <thead><tr>
+    <th style="width:110px;">分类</th>
+    <th style="width:170px;">发件人</th>
+    <th style="width:200px;">主题</th>
+    <th style="width:300px;">正文摘要</th>
+    <th style="width:150px;">匹配企业</th>
+    <th style="width:130px;">建议</th>
+    <th style="width:80px;">状态</th>
+    <th style="width:280px;">操作</th>
+  </tr></thead>
+  <tbody>
+  {% for it in items %}
+    <tr>
+      <td>
+        <span style="color:{% if it.rule_id in ['R4','R5'] %}#b45309{% elif it.rule_id in ['R1','R2'] %}#2563eb{% else %}#6b7280{% endif %};font-weight:600;">[{{ it.rule_id }}] {{ it.label }}</span>
+        <div class="hint" style="margin:2px 0 0;">conf {{ it.confidence }}</div>
+      </td>
+      <td>{{ it.from_address or '' }}</td>
+      <td>{{ it.subject or '' }}</td>
+      <td><div title="{{ it.body_snippet or '' }}" style="white-space:pre-wrap;max-height:80px;overflow:hidden;font-size:12px;color:#555;">{{ (it.body_snippet or '')[:220] }}{% if (it.body_snippet or '')|length > 220 %}…{% endif %}</div></td>
+      <td>
+        {% if it.matched_main_id %}
+          <a href="{{ url_for('company_detail', main_id=it.matched_main_id) }}">{{ it.company_name or it.matched_main_id }}</a>
+        {% else %}
+          <span style="color:#b91c1c;">（陌生邮箱）</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if it.suggested_pool %}<span style="color:#16a34a;">换 → {{ it.suggested_pool }}</span>
+        {% elif it.action_detail %}<span class="hint">{{ it.action_detail[:40] }}</span>
+        {% else %}—{% endif %}
+      </td>
+      <td>
+        {% if it.status == 'review' %}<span style="color:#b45309;">待审核</span>
+        {% elif it.status == 'applied' %}<span style="color:#16a34a;">已处理</span>
+        {% else %}<span style="color:#6b7280;">已忽略</span>{% endif %}
+        {% if it.reviewer %}<div class="hint" style="margin:2px 0 0;">{{ it.reviewer }}</div>{% endif %}
+      </td>
+      <td>
+        {% if it.status == 'review' %}
+          {% if it.matched_main_id %}
+          <form method="post" action="{{ url_for('email_review_resolve', review_id=it.id) }}" class="inline">
+            <input type="hidden" name="action" value="pool">
+            <input type="hidden" name="main_id" value="{{ it.matched_main_id }}">
+            <select name="to_pool" style="max-width:130px;">
+              {% for p in pools %}
+              <option value="{{ p }}" {{ 'selected' if it.suggested_pool == p }}>{{ p }}</option>
+              {% endfor %}
+            </select>
+            <input type="text" name="note" placeholder="备注(可选)" style="max-width:90px;">
+            <button class="primary">换池</button>
+          </form>
+          <form method="post" action="{{ url_for('email_review_resolve', review_id=it.id) }}" class="inline" style="margin-top:4px;">
+            <input type="hidden" name="action" value="ignore">
+            <button class="muted">忽略(误判)</button>
+          </form>
+          {% else %}
+          <form method="post" action="{{ url_for('email_review_resolve', review_id=it.id) }}" class="inline">
+            <input type="hidden" name="action" value="ignore">
+            <button class="muted">忽略(陌生邮箱)</button>
+          </form>
+          {% endif %}
+        {% else %}
+          <span class="hint">已处理{{ ' · ' + it.reviewed_at if it.reviewed_at else '' }}</span>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">当前无邮件待审核。WorkBuddy 低置信分类的邮件会进这里。</p>
+{% endif %}
+{% endblock %}
