@@ -18,6 +18,8 @@
 
 ## 改动记录（按日倒序）
 
+- **2026-09-10（WorkBuddy 侧·首跑）**：**真实写入首跑完成**（跑前备份 `leads.db.bak_20260910_wb_firstrun`）。email_review 18 行（applied 8 / review 7 / ignored 3）；bounce 库外动作 5 封（email_anomalies #182-185 新增 + #181 幂等复用 przetargi@；gmail_contacts 置 invalid 3 行，标无效对象=被弹回收件人而非 mailer-daemon）；spec v1.1.0 域后缀反查生效（PIVIT michal.sarnecki@ → LDPL-304de4192e）。review 队列 7 条待人工/Claude 扫（R5×4 建议已取得联系、R4×2 建议核后黑名单、R6×1 陌生个人）。剩：用户 OAuth readonly 授权 → fetch 模块 → 09:00 自动化。
+
 - **2026-09-10（WorkBuddy 侧，邮件回复分类管线）**：`scripts/email_pipeline_wb.py` 落地（WorkBuddy 拥有），读 spec.json 规则做 R1→R7 瀑布分类 + 发件人匹配（只走 core 函数零裸 SQL）+ 写入端（record_email_review/mark_email_invalid/mark_contact_invalid，缺函数自动降级 dry-run）。真实样本 `data/email_samples/` 16/16 回归通过，修复 Claude 提的 3 个质量问题：①Volt Polska own_brand → R4（own_brand 句式 + R5 前 R4 让位）；②Menlo 停业 → R4（RE_R4_STRONG 压过 R2 自动回复）；③KSTAR 工单关闭 → R7（RE_TICKET_CLOSED 终态 vs TIM 自动 ack 区分）。裁决(ii)落地（R3/R7 conf≥0.5 允许 ignored）。自研 2 条待复核：bounce 收件人提取（标无效对象=被弹回地址，非 mailer-daemon）、自发邮件拦截（from=hsh@wccsolar.es → ignored）。⚠ 样本 Deye_...__1a07c79adeaf 疑似导错（是群发原件非 bounce），已请 Claude 复核；match_logic 域名后缀反查建议待拍板。进展详见 `对接-workbuddy.md`。
 
 - **2026-09-08**

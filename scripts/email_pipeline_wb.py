@@ -295,7 +295,11 @@ def _result(msg, rid, rule, conf, basis):
 # ---------------------------------------------------------------------------
 
 def match_sender(from_email, db_path=None):
-    from core import list_gmail_contacts, list_companies, split_emails
+    """发件人 → 企业匹配（spec v1.1.0 match_logic 四步）：
+    ①gmail_contacts 精确 ②companies.email 精确 ③域后缀→companies.domain 反查 ④陌生。
+    第三步护栏（Claude 拍板）：仅唯一命中才算匹配；免费邮箱域不参与。"""
+    from core import (list_gmail_contacts, list_companies, split_emails,
+                      FREE_EMAIL_DOMAINS)
     if not from_email or "@" not in from_email:
         return None, "", "unmatched"
     e = from_email.strip().lower()
@@ -305,6 +309,13 @@ def match_sender(from_email, db_path=None):
     for c in list_companies(query=e, limit=50, db_path=db_path):
         if e in [x.lower() for x in split_emails(c.get("email"))]:
             return c["main_id"], e, "exact_companies_email"
+    # 第四步（spec v1.1.0）：@pivit.pl 这类企业自有域后缀 → companies.domain 反查
+    _, _, suffix = e.rpartition("@")
+    if suffix and suffix not in FREE_EMAIL_DOMAINS:
+        hits = [c for c in list_companies(query=suffix, limit=50, db_path=db_path)
+                if (c.get("domain") or "").strip().lower() == suffix]
+        if len(hits) == 1:                     # 多命中/零命中都不算，宁缺勿滥
+            return hits[0]["main_id"], e, "domain_suffix_companies_domain"
     return None, "", "unmatched"
 
 # ---------------------------------------------------------------------------
