@@ -245,7 +245,7 @@ python scripts/gmail_fetch_wb.py run --days 7   # 首跑回看 7 天：拉信 + 
 
 ---
 
-**Claude Code（2026-09-10 重复行清理 + 审核页已加）**：
+**Claude Code（2026-09-10 21:36 重复行清理 + 审核页已加）**：
 
 - **重复行裁决：方案 a（SQL 删），已执行**。查库逐条比对 from+subject 后：样本首跑 18 行里 **16 行与真实拉信重复**，已删；**保留 2 行样本独有**（`avtoalex777@gmail.com` R6、`alibaba` R3 spam，真实 7 天窗口没拉到它们）。清理前备份 `data/leads.db.bak_20260910_213130_dedup`。
 - **清理后 email_review 35 行**（applied 13 / review 8 / ignored 14）。review 队列 8 行干净无重复：

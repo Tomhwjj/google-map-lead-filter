@@ -25,6 +25,7 @@ import os
 import sys
 import threading
 import webbrowser
+from email.utils import parsedate_to_datetime
 
 from flask import Flask, redirect, render_template, request, url_for
 
@@ -318,6 +319,21 @@ _CLASS_LABEL = {
 _SUGGEST_POOL = {"R4": "黑名单客户", "R5": "潜在客户(已取得联系)"}
 
 
+def _fmt_dt(s):
+    """RFC2822 邮件日期 / ISO 时间戳 → 本地简洁 'YYYY-MM-DD HH:MM'。"""
+    if not s:
+        return ""
+    s = str(s).strip()
+    # ISO 形式 2026-09-10T21:18:04（created_at/reviewed_at），精确匹配前缀，
+    # 避免 RFC2822 里 "Tue" 的 T 被误判成 ISO 分隔符
+    if len(s) >= 16 and s[4] == "-" and s[7] == "-" and s[10] == "T":
+        return s[:16].replace("T", " ")
+    try:
+        return parsedate_to_datetime(s).astimezone().strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return s[:16]
+
+
 @app.route("/email-review", methods=["GET"])
 def email_review_list():
     status = request.args.get("status", "review")
@@ -326,6 +342,8 @@ def email_review_list():
         it["label"] = _CLASS_LABEL.get(it.get("classification") or "",
                                        it.get("classification") or "")
         it["suggested_pool"] = _SUGGEST_POOL.get(it.get("rule_id") or "", "")
+        it["mail_date_fmt"] = _fmt_dt(it.get("mail_date"))
+        it["reviewed_at_fmt"] = _fmt_dt(it.get("reviewed_at"))
     return render_template("email_review.html", items=items, status=status, pools=POOLS)
 
 

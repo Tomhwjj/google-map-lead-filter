@@ -22,6 +22,7 @@
 <table>
   <thead><tr>
     <th style="width:110px;">分类</th>
+    <th style="width:120px;">邮件时间</th>
     <th style="width:170px;">发件人</th>
     <th style="width:200px;">主题</th>
     <th style="width:300px;">正文摘要</th>
@@ -37,6 +38,7 @@
         <span style="color:{% if it.rule_id in ['R4','R5'] %}#b45309{% elif it.rule_id in ['R1','R2'] %}#2563eb{% else %}#6b7280{% endif %};font-weight:600;">[{{ it.rule_id }}] {{ it.label }}</span>
         <div class="hint" style="margin:2px 0 0;">conf {{ it.confidence }}</div>
       </td>
+      <td>{{ it.mail_date_fmt or '—' }}</td>
       <td>{{ it.from_address or '' }}</td>
       <td>{{ it.subject or '' }}</td>
       <td><div title="{{ it.body_snippet or '' }}" style="white-space:pre-wrap;max-height:80px;overflow:hidden;font-size:12px;color:#555;">{{ (it.body_snippet or '')[:220] }}{% if (it.body_snippet or '')|length > 220 %}…{% endif %}</div></td>
@@ -83,7 +85,7 @@
           </form>
           {% endif %}
         {% else %}
-          <span class="hint">已处理{{ ' · ' + it.reviewed_at if it.reviewed_at else '' }}</span>
+          <span class="hint">已处理{{ ' · ' + it.reviewed_at_fmt if it.reviewed_at_fmt else '' }}</span>
         {% endif %}
       </td>
     </tr>
