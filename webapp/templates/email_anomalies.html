@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}无邮箱异常{% endblock %}
+{% block title %}邮箱异常{% endblock %}
 {% block content %}
-<h1>无邮箱异常记录</h1>
-<p class="hint">邮箱是联系底线。获客时没拿到某企业邮箱 → 划入异常并分析原因。补到邮箱后人工「关闭」。</p>
+<h1>邮箱异常记录</h1>
+<p class="hint">两类异常：<b>无邮箱</b>（获客没拿到邮箱 → 分析为什么没邮箱）+ <b>无效邮箱</b>（bounce 退信 → 记失效地址）。补到邮箱 / 换有效邮箱后人工「关闭」。</p>
 
 {% if request.args.get('msg') %}
 <p class="hint" style="color:#16a34a;">{{ request.args.get('msg') }}</p>
@@ -22,11 +22,13 @@
 <h2>异常清单（{{ anomalies | length }}）</h2>
 {% if anomalies %}
 <table>
-  <thead><tr><th>企业</th><th>国家</th><th style="width:320px;">原因分析</th><th>电话</th><th>官网</th><th style="width:90px;">状态</th><th style="width:90px;">操作</th></tr></thead>
+  <thead><tr><th>类型</th><th>邮箱</th><th>企业</th><th>国家</th><th style="width:300px;">原因分析</th><th>电话</th><th>官网</th><th style="width:90px;">状态</th><th style="width:90px;">操作</th></tr></thead>
   <tbody>
   {% for a in anomalies %}
     <tr>
-      <td><a href="{{ url_for('company_detail', main_id=a.main_id) }}">{{ a.company_name or a.main_id }}</a></td>
+      <td>{% if a.email %}<span style="color:#b91c1c;">无效邮箱</span>{% else %}无邮箱{% endif %}</td>
+      <td>{{ a.email or '' }}</td>
+      <td>{% if a.main_id %}<a href="{{ url_for('company_detail', main_id=a.main_id) }}">{{ a.company_name or a.main_id }}</a>{% else %}{{ a.company_name or '（陌生邮箱）' }}{% endif %}</td>
       <td>{{ a.country or '' }}</td>
       <td>{{ a.reason or '' }}</td>
       <td>{{ a.phone or '' }}</td>

@@ -113,22 +113,30 @@ def get_credentials():
 def _session(creds):
     from google.auth.transport.requests import AuthorizedSession
     s = AuthorizedSession(creds)
-    s.trust_env = True
+    # 沙箱环境变量的 HTTPS_PROXY 指向 WorkBuddy 内部代理(:2585)，对 Google 域 502——
+    # 必须 trust_env=False + 显式代理。用户 VPN 本地端口默认 33210，可用 WB_GMAIL_PROXY 覆盖。
+    s.trust_env = False
+    proxy = os.environ.get("WB_GMAIL_PROXY", "http://127.0.0.1:33210")
+    if proxy:
+        s.proxies = {"https": proxy, "http": proxy}
     return s
 
 
-def _get_retry(session, url, params=None, tries=3):
-    """API GET 重试（代理瞬时 502 抖动兜底）。"""
+def _get_retry(session, url, params=None, tries=6):
+    """API GET 重试（代理瞬时 502 抖动兜底；总窗口约 75s，覆盖节点切换）。"""
     import time
     last = None
     for i in range(tries):
         try:
-            r = session.get(url, params=params)
+            r = session.get(url, params=params, timeout=30)
             r.raise_for_status()
             return r
         except Exception as e:
             last = e
-            time.sleep(3 * (i + 1))
+            wait = 5 * (i + 1)
+            print(f"  GET 失败({i+1}/{tries})，{wait}s 后重试: {type(e).__name__}",
+                  file=sys.stderr, flush=True)
+            time.sleep(wait)
     raise last
 
 
