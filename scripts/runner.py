@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 后台任务执行层：把「UI 按钮」桥接到「自动干活」。
@@ -37,31 +37,87 @@ EU_UKRAINE = ["DE", "FR", "NL", "IT", "ES", "BE", "AT", "PL", "PT", "SE",
               "DK", "FI", "IE", "CZ", "HU", "RO", "SK", "SI", "HR", "GR",
               "BG", "LT", "LV", "EE", "LU", "CY", "MT", "UA"]
 
-# 7 个判断维度（与 core.RESEARCH_DIMS 一致）
-RESEARCH_DIMS = ["政策补贴", "装机增速", "经销商活跃度", "进口需求",
-                 "贸易壁垒", "新闻情绪", "竞品供应链"]
+# 7+2 个判断维度（与 core.RESEARCH_DIMS 一致；v2 加「潜在客户总量/有效获客源」）
+try:
+    from core import RESEARCH_DIMS as _CORE_DIMS
+    RESEARCH_DIMS = _CORE_DIMS
+except ImportError:
+    RESEARCH_DIMS = ["政策补贴", "装机增速", "经销商活跃度", "进口需求",
+                     "贸易壁垒", "新闻情绪", "竞品供应链",
+                     "潜在客户总量", "有效获客源"]
 
 # 背调品牌三组清单（我方 Deye + 贴牌 + 竞品，与 references/brand-mapping.md 一致）
 BRANDS = ("Deye,Sunsynk,Sol-Ark,INGE,Fusion,OHm,Noark,"
           "Huawei,Sungrow,GoodWe,Fronius,SMA,Solax,Sofar,Growatt,Kostal,"
           "SolarEdge,Enphase,Hoymiles,FoxESS,Solis")
 
-# 国家码 → (搜索语言代码, 本地语言关键词若干) —— 获客抓取用，缺失国用英文兜底
+# 国家码 → (搜索语言代码, 本地语言关键词若干) —— 获客抓取用
+# v2（2026-09-12 WorkBuddy）：补齐欧盟 27 国 + 乌克兰全覆盖（此前仅 7 国，其余英文兜底
+# 导致小语种市场召回差——语言问题频发的根源）。词序：储能批发 / 经销 / 安装。
+# 口径同 references/search-keywords.md（储能优先）；关键语言翻译建议背调时人工抽查校准。
 COUNTRY_KEYWORDS = {
-    "DE": ("de", ["Speicher Großhändler", "Batteriespeicher Großhandel",
-                  "Hybridwechselrichter Distributor", "Photovoltaik Speicher Installateur"]),
+    "DE": ("de", ["Speicher Großhändler", "Batteriespeicher Distributor",
+                  "Photovoltaik Speicher Installateur"]),
     "FR": ("fr", ["grossiste stockage batterie", "distributeur onduleur hybride",
                   "installateur batterie solaire"]),
     "NL": ("nl", ["thuisbatterij groothandel", "batterij opslag distributeur",
                   "thuisbatterij installateur"]),
-    "IT": ("it", ["grossista accumulo batteria", "distributore inverter ibrido",
+    "BE": ("nl", ["thuisbatterij groothandel", "batterij opslag distributeur",
+                  "thuisbatterij installateur"]),
+    "AT": ("de", ["Speicher Großhändler", "Batteriespeicher Distributor",
+                  "Photovoltaik Speicher Installateur"]),
+    "IT": ("it", ["grossista sistemi di accumulo", "distributore inverter ibrido",
                   "installatore batteria solare"]),
     "ES": ("es", ["mayorista almacenamiento batería", "distribuidor inversor híbrido",
                   "instalador batería solar"]),
-    "PL": ("pl", ["hurtownik magazyn energii", "dystrybutor falownik hybrydowy",
-                  "instalator magazyn energii"]),
+    "PL": ("pl", ["hurtownik magazynów energii", "dystrybutor magazynu energii",
+                  "instalator magazynów energii"]),
     "PT": ("pt", ["grossista armazenamento bateria", "distribuidor inversor híbrido",
                   "instalador bateria solar"]),
+    "SE": ("sv", ["batterilager grossist", "solcellsbatteri distributör",
+                  "solcellsinstallatör batterilager"]),
+    "DK": ("da", ["batterilager grossist", "solcellebatteri distributør",
+                  "solcelleinstallatør"]),
+    "FI": ("fi", ["energiavarasto tukku", "hybridivaihtosuuntaaja jälleenmyyjä",
+                  "aurinkopaneeli akku asentaja"]),
+    "IE": ("en", ["battery storage wholesaler", "hybrid inverter distributor",
+                  "solar battery installer"]),
+    "CZ": ("cs", ["velkoobchod bateriová úložiště", "distributor hybridních střídačů",
+                  "instalace fotovoltaiky s baterií"]),
+    "HU": ("hu", ["energiatároló nagykereskedő", "hibrid inverter forgalmazó",
+                  "napelem akkumulátor telepítő"]),
+    "RO": ("ro", ["angrosist sisteme de stocare", "distribuitor invertor hibrid",
+                  "instalator panouri solare baterii"]),
+    "SK": ("sk", ["veľkoobchod batériové úložiská", "distributor hybridných meničov",
+                  "inštalácia fotovoltaiky s batériou"]),
+    "SI": ("sl", ["trgovina na veliko baterijska skladišča",
+                  "distributer hibridnih pretvornikov",
+                  "namestitev fotovoltaike z baterijo"]),
+    "HR": ("hr", ["veleprodaja baterijskih sustava", "distributer hibridnih invertera",
+                  "instalater solarnih sustava"]),
+    "GR": ("el", ["χονδρικό εμπόριο συστημάτων αποθήκευσης",
+                  "διανομέας υβριδικών αντιστροφέων",
+                  "εγκαταστάτης φωτοβολταϊκών με μπαταρία"]),
+    "BG": ("bg", ["едро на акумулаторни системи", "дистрибутор на хибридни инвертори",
+                  "монтажник на соларни батерии"]),
+    "LT": ("lt", ["didmeninė prekyba energijos kaupikliais",
+                  "platintojas hibridiniai keitikliai",
+                  "montuotojas saulės baterijų sistemos"]),
+    "LV": ("lv", ["vairumtirdzniecība enerģijas uzglabāšana",
+                  "izplatītājs hibrīdie invertori",
+                  "uzstādītājs saules bateriju sistēmas"]),
+    "EE": ("et", ["hulgimüük akudesüsteemid", "edasimüüja hübriidinverterid",
+                  "paigaldaja päikesepaneelide akud"]),
+    "LU": ("fr", ["grossiste stockage batterie", "distributeur onduleur hybride",
+                  "installateur batterie solaire"]),
+    "CY": ("el", ["χονδρικό εμπόριο συστημάτων αποθήκευσης",
+                  "διανομέας υβριδικών αντιστροφέων",
+                  "εγκαταστάτης φωτοβολταϊκών με μπαταρία"]),
+    "MT": ("en", ["battery storage wholesaler", "hybrid inverter distributor",
+                  "solar battery installer"]),
+    "UA": ("uk", ["оптовий продавець накопичувачів енергії",
+                  "дистриб'ютор гібридних інверторів",
+                  "монтажник сонячних станцій з накопичувачами"]),
 }
 
 
@@ -91,12 +147,13 @@ def build_research_prompt(mr_id):
     结构化输出」，落库交给 launch_research 解析 JSON 后调 core.save_country_score。"""
     countries = " ".join(EU_UKRAINE)
     dims = " / ".join(RESEARCH_DIMS)
+    n_dims = len(RESEARCH_DIMS)
     return f'''你是「光伏海外获客系统」的市场调研 Agent，独立完成任务，不要向用户提问，不要中途停下。
 
 【任务】对欧洲市场 28 国（欧盟 27 国 + 乌克兰）做光伏/储能市场调研，给每个国家打「开发热度分」(0-100)。
 
 【28 国代码】{countries}
-【7 个判断维度】{dims}
+【{n_dims} 个判断维度】{dims}
 
 【打分标准】
 - 80+：欧洲核心市场（德国/波兰/荷兰/西班牙等，装机大 + 增长快 + 政策稳）
@@ -105,18 +162,22 @@ def build_research_prompt(mr_id):
 - 50-59：小市场或增速一般
 - 49 以下：极小市场或高风险
 
-【执行】对每个国家用 WebSearch 联网调研（英文关键词，例如 "<country> residential battery storage market 2025 growth solar"），据结果打分，写核心利好/利空/风险/来源URL，并给 7 个维度各写一句判断依据。搜不到数据的国家按行业通识合理给分，sources 写「初判（待核实）」。
+【两个量化维度的硬要求】
+- 「潜在客户总量」：给出该国可触达的经销商/安装商/批发商**数量上限测算**，必须带来源佐证——目录源按「页数×每页条数」算（如 ENF installer 目录 12 页×100≈1200 家）、官方认证注册库给注册数（如波兰 UDT 认证安装商、德国 TÜV/BSW 名单）、行业协会给会员数、行业报告给渠道商总数。格式：「约 N 家（依据：…）」，拿不到硬数据给区间并标「估」。
+- 「有效获客源」：列出该国**实测或强证据**的获客渠道及其产量证据——如「ENF installer 目录 12 页（实测）」「Google Maps 城市级矩阵有效，20 城可铺」「品牌官网 find-a-distributor 有本地页」「UDT 注册库公开可查」。没证据的渠道不写。
+
+【执行】对每个国家用 WebSearch 联网调研（英文关键词，例如 "<country> residential battery storage market 2025 growth solar"），据结果打分，写核心利好/利空/风险/来源URL，并给 {n_dims} 个维度各写一句判断依据。搜不到数据的国家按行业通识合理给分，sources 写「初判（待核实）」。
 
 【输出格式】最后只输出一个 JSON 数组（不要输出任何别的解释文字，不要用 markdown 代码块包裹），以 [[[RESEARCH_JSON]]] 开头、[[[END_RESEARCH_JSON]]] 结尾，格式：
 
 [[[RESEARCH_JSON]]]
 [
-  {{"country":"DE","score":83,"positives":"...","negatives":"...","risks":"...","sources":"...","dimensions":{{"政策补贴":"...","装机增速":"...","经销商活跃度":"...","进口需求":"...","贸易壁垒":"...","新闻情绪":"...","竞品供应链":"..."}}}},
-  {{"country":"FR","score":72,"positives":"...","negatives":"...","risks":"...","sources":"...","dimensions":{{"政策补贴":"...","装机增速":"...","经销商活跃度":"...","进口需求":"...","贸易壁垒":"...","新闻情绪":"...","竞品供应链":"..."}}}}
+  {{"country":"DE","score":83,"positives":"...","negatives":"...","risks":"...","sources":"...","dimensions":{{"政策补贴":"...","装机增速":"...","经销商活跃度":"...","进口需求":"...","贸易壁垒":"...","新闻情绪":"...","竞品供应链":"...","潜在客户总量":"约 N 家（依据：…）","有效获客源":"ENF 目录 N 页（实测）；Maps 城市级矩阵…"}}}},
+  {{"country":"FR","score":72,"positives":"...","negatives":"...","risks":"...","sources":"...","dimensions":{{"政策补贴":"...","装机增速":"...","经销商活跃度":"...","进口需求":"...","贸易壁垒":"...","新闻情绪":"...","竞品供应链":"...","潜在客户总量":"约 N 家（依据：…）","有效获客源":"…"}}}}
 ]
 [[[END_RESEARCH_JSON]]]
 
-【硬要求】JSON 数组里必须正好 28 个对象（{countries}），score 是 0-100 整数，dimensions 7 维全填；只输出 JSON，不要夹杂其他文字。'''
+【硬要求】JSON 数组里必须正好 28 个对象（{countries}），score 是 0-100 整数，dimensions {n_dims} 维全填（潜在客户总量/有效获客源必须给数量和证据，不许写「无数据」空话，实在没有就给区间+「估」）；只输出 JSON，不要夹杂其他文字。'''
 
 
 def _parse_research_json(text):
@@ -271,7 +332,7 @@ def launch_acquisition(task_id, country="", log_dir=None):
         run_step("4.官网背调(backfill)", [
             PYTHON, os.path.join(SCRIPTS_DIR, "backfill.py"), merged_csv,
             "--out", backfill_json, "--brands", BRANDS,
-            "--deye", "Deye,Sunsynk,Sol-Ark,INGE,Fusion,OHm,Noark", "--fast"])
+            "--deye", "Deye,Sunsynk,Sol-Ark,INGE,Fusion,OHm,Noark"])  # 正式跑全量模式（--fast 仅限测试，勿加回）
 
         # 5. 双模式评分 + 分级
         run_step("5.评分分级(score_leads)", [

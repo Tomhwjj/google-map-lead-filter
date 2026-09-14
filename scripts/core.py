@@ -20,6 +20,7 @@
 import json
 import re
 import sys
+import unicodedata
 from datetime import datetime, timedelta
 
 from db import (DEFAULT_DB, DEFAULT_POOL, POOLS, gen_main_id, gen_mr_id,
@@ -28,10 +29,12 @@ from db import (DEFAULT_DB, DEFAULT_POOL, POOLS, gen_main_id, gen_mr_id,
 
 # 判定「差异」的关键字段 + 归一化函数（normalize 后比较，忽略格式差异）
 KEY_FIELDS = [
-    ("company_name",  lambda v: re.sub(r"\s+", "", (v or "").lower())),
+    # 2026-09-12 WorkBuddy 改：company_name/website 换用语义归一化，
+    # "同一实体两种写法"（SEO 标题 vs 干净名、http/www/utm 变体）不再算差异
+    ("company_name",  lambda v: " ".join(sorted(_norm_company_tokens(v)))),
     ("phone",         lambda v: re.sub(r"[\s\-()]+", "", v or "")),
     ("email",         lambda v: (v or "").lower().strip()),
-    ("website",       lambda v: (v or "").lower().strip().rstrip("/")),
+    ("website",       lambda v: _norm_website(v)),
     ("customer_type", lambda v: (v or "").lower().strip()),
     ("city",          lambda v: re.sub(r"\s+", "", (v or "").lower())),
 ]
@@ -209,6 +212,13 @@ def ingest_leads(leads, task_id, dry_run=False, db_path=None):
              "new_main_ids": [], "diff_main_ids": []}
 
     for lead in leads:
+        # backfill 抓到的邮箱在 emails 列表（官网 scrape 所得），入库前并入 email 字段
+        # （2026-09-12 WorkBuddy 修：此前 ingest 只认 email 字符串，scrape 邮箱全部丢失）
+        if not (lead.get("email") or "").strip() and lead.get("emails"):
+            merged = ", ".join(dict.fromkeys(
+                e.strip() for e in lead["emails"] if e and e.strip()))
+            if merged:
+                lead["email"] = merged
         domain = normalize_domain(lead.get("website"))
         name_key = normalize_name(lead.get("company_name"))
         existing = _find_existing(conn, domain, name_key)
@@ -227,7 +237,24 @@ def ingest_leads(leads, task_id, dry_run=False, db_path=None):
                 stats["new_main_ids"].append(main_id)
         else:
             diffs = _field_diff(existing, lead)
-            if not diffs:
+            # 2026-09-12 WorkBuddy 改（用户裁定）：phone 差异不要全拦——
+            #   ① 新值为空：不算升级，直接忽略，不进队列；
+            #   ② 旧值是占位垃圾（如 'Click to show company phone'）：新号客观是升级，自动覆盖不入队列。
+            auto_upgrade = [d for d in diffs if (d[2] or "").strip() and (
+                (d[0] == "phone" and _is_phone_placeholder(d[1]))
+                or (d[0] == "website" and _is_junk_website(d[1])))]
+            # 2026-09-12 WorkBuddy 改（用户裁定：不要把垃圾差异都拦进来）：
+            #   ① 新值为空（任意字段）：不算升级，忽略不入队列；
+            #   ② phone 旧值占位 / website 旧值垃圾（广告跳转链等）：自动覆盖记轨迹；
+            #   ③ website 同域不同路径（http/www/utm/深链变体）：保旧值，不入队列；
+            #   ④ company_name 实词集合互相包含（SEO 标题 vs 干净名）：同一实体，不入队列。
+            diffs = [d for d in diffs if not (
+                (not (d[2] or "").strip())
+                or (d[0] == "phone" and _is_phone_placeholder(d[1]))
+                or (d[0] == "website" and (_is_junk_website(d[1])
+                                           or (_web_host(d[1]) and _web_host(d[1]) == _web_host(d[2]))))
+                or (d[0] == "company_name" and is_same_company_name(d[1], d[2])))]
+            if not diffs and not auto_upgrade:
                 stats["dup"] += 1
                 if not dry_run:
                     conn.execute(
@@ -240,6 +267,15 @@ def ingest_leads(leads, task_id, dry_run=False, db_path=None):
                 stats["diff"] += 1
                 stats["diff_main_ids"].append(existing["main_id"])
                 if not dry_run:
+                    # 占位/垃圾旧值自动升级：覆盖对应字段 + 记 approved 差异轨迹
+                    for field, old, new in auto_upgrade:
+                        conn.execute(
+                            f"UPDATE companies SET {field}=?, updated_at=? WHERE main_id=?",
+                            (new, now, existing["main_id"]))
+                        conn.execute(
+                            "INSERT INTO diffs (main_id, task_id, field, old_value, new_value, status, detected_at, reviewer) "
+                            "VALUES (?,?,?,?,?, 'approved', ?, 'auto(垃圾旧值升级)')",
+                            (existing["main_id"], task_id, field, old, new, now))
                     for field, old, new in diffs:
                         conn.execute(
                             "INSERT INTO diffs (main_id, task_id, field, old_value, new_value, status, detected_at) "
@@ -259,6 +295,79 @@ def ingest_leads(leads, task_id, dry_run=False, db_path=None):
             pass  # 邮箱队列失败不影响主入库
     conn.close()
     return stats
+
+
+def _is_phone_placeholder(v):
+    """判断是否为电话占位垃圾（非真号码）。2026-09-12 WorkBuddy 加。"""
+    s = (v or "").strip().lower()
+    if not s:
+        return True
+    return any(k in s for k in ("click", "show", "hidden", "call now"))
+
+
+# ---------- 2026-09-12 WorkBuddy 加：公司名/网址归一化（消灭"同一实体两种写法"的垃圾差异） ----------
+
+# 法人形式 + 行业营销词：Maps 抓的是 SEO 标题（"X - Hurtownia Fotowoltaiczna | ..."），
+# 这些词不参与"是否同一家公司"的判断
+_NAME_STOP_TOKENS = {
+    # 法人形式/结构词
+    "sp", "z", "o", "oo", "s", "c", "a", "sa", "sc", "sj", "j", "k", "r", "v",
+    "ltd", "gmbh", "llc", "inc", "pphu", "p_h_u", "spolka", "spolka",
+    "ograniczona", "odpowiedzialnoscia", "odpowiedzialnoscia", "odpowiedzialn",
+    "komandytowa", "jawna", "cywilna", "oddzial", "filia", "w",
+    # 行业营销词（标题装饰）
+    "hurtownia", "hurt", "hurtu", "sklep", "sklepu", "oficjalna", "dystrybutor",
+    "dystrybucja", "autoryzowany", "generalny",
+    "fotowoltaika", "fotowoltaika", "fotowoltaiczne", "fotowoltaiczna",
+    "fotowoltaiczny", "fotovoltaic", "photovoltaic", "pv",
+    "solar", "solarna", "solarny", "solarnelodz", "solarne", "solars",
+    "panele", "panel", "energia", "energy", "energetyczna", "energetyczne",
+    "energii", "instalacje", "instalacja", "magazyn", "magazyny",
+    "elektrotechniczna", "elektryczna", "elektryk", "grzewcza", "termomodernizacja",
+    "i", "oraz", "the", "and", "of", "for", "com", "pl", "eu", "net", "pro",
+    "group", "grupa", "polska", "polskie", "polski", "krakow", "warszawa",
+    "poznan", "lodz", "katowice", "gdansk", "szczecin", "rybnik", "wroclaw",
+}
+
+
+def _norm_company_tokens(v):
+    """公司名 → 实词集合（去变音符/标点/数字/法人形式/营销词/城市词）。"""
+    s = unicodedata.normalize("NFKD", (v or "")).encode("ascii", "ignore").decode()
+    s = re.sub(r"[^a-z0-9\s]", " ", s.lower())
+    return {t for t in s.split() if t and t not in _NAME_STOP_TOKENS and not t.isdigit()}
+
+
+def is_same_company_name(a, b):
+    """判断两个公司名写法是否同一实体：实词集合存在包含关系即视为同一家的装饰差异。"""
+    ta, tb = _norm_company_tokens(a), _norm_company_tokens(b)
+    if not ta or not tb:
+        return ta == tb
+    return ta <= tb or tb <= ta
+
+
+def _norm_website(v):
+    """网址规范化：去 scheme/www/query/fragment/尾斜杠，只留 host+path。"""
+    s = (v or "").strip().lower()
+    s = re.sub(r"^[a-z][a-z0-9+.-]*://", "", s)
+    s = re.sub(r"^www\.", "", s)
+    return s.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+
+
+def _web_host(v):
+    """取规范化网址的 host 部分；广告跳转链等无 host 返回空。"""
+    n = _norm_website(v)
+    host = n.split("/", 1)[0]
+    return host if re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", host) else ""
+
+
+def _is_junk_website(v):
+    """判断旧网址是否为垃圾（空/相对路径/Google 广告跳转链等），新值是真网址时应自动升级。"""
+    s = (v or "").strip().lower()
+    if not s:
+        return True
+    if s.startswith("/") or s.startswith("?"):          # 相对路径 / aclk 跳转
+        return True
+    return _web_host(s) == ""
 
 
 def _parse_json(s):
@@ -290,9 +399,13 @@ EU_UKRAINE = ["DE", "FR", "NL", "IT", "ES", "BE", "AT", "PL", "PT", "SE",
               "DK", "FI", "IE", "CZ", "HU", "RO", "SK", "SI", "HR", "GR",
               "BG", "LT", "LV", "EE", "LU", "CY", "MT", "UA"]
 
-# 市调 7 维度（判断依据拆解，热度分 = 综合研判）
+# 市调 9 维度（判断依据拆解，热度分 = 综合研判）
+# v2（2026-09-12 WorkBuddy）：+「潜在客户总量」（市场 TAM 上限测算，带来源依据）
+#                        +「有效获客源」（实测有产量的获客渠道及证据）
+# dimensions 是 JSON 列，旧数据缺这两键按空渲染，无需迁移。
 RESEARCH_DIMS = ["政策补贴", "装机增速", "经销商活跃度", "进口需求",
-                 "贸易壁垒", "新闻情绪", "竞品供应链"]
+                 "贸易壁垒", "新闻情绪", "竞品供应链",
+                 "潜在客户总量", "有效获客源"]
 
 
 def wa_link(phone, country=""):
@@ -337,9 +450,19 @@ _JUNK_EMAIL_DOMAINS = {
     "email.com", "email.pl", "email.net", "test.com",
     "home.com", "company.com",                       # Wix 等构建器占位默认
     "sentry.io", "sentry.wixpress.com", "sentry-next.wixpress.com",
+    # 2026-09-13 WorkBuddy 补充：模板/表单占位域名（退信实证，见对接板同日帖）
+    "mail.com", "firma.pl", "uzupelnic.pl",          # twoja.nazwa@mail.com / jan@firma.pl / prosze@uzupelnic.pl
+    "domena.pl", "twojadomena.pl", "twoja-domena.pl", # 「你的域名」类表单占位
 }
 # 前缀/子串提示（no-reply 机器人、PrestaShop 授权邮箱等）
-_JUNK_EMAIL_HINTS = ("no-reply", "noreply", "license@", "@2x", "@900")
+# 2026-09-13 WorkBuddy 补充：波兰表单/模板占位词。注意用整词不带裸姓氏
+# （kowalski 是波兰第一大姓，客服 kowalski.m@正规域 是真人，不能拦）。
+_JUNK_EMAIL_HINTS = ("no-reply", "noreply", "license@", "@2x", "@900",
+                     "twoja.nazwa", "twoj.email", "twoj.adres",    # 「您的名字/邮箱/地址」
+                     "prosze@", "proszę@", "uzupelnic",            # 「请填写」
+                     "nazwa.firmy", "adres.email",                 # 「公司名/邮箱地址」占位
+                     "anna.kowalska", "jan.kowalski", "jankowalski", # 波兰版 John Doe 模板人名
+                     )
 _JUNK_EMAIL_TLDS = {"png", "jpg", "jpeg", "webp", "svg", "gif", "bmp", "ico",
                     "tiff", "css", "js", "pdf", "zip"}
 
@@ -406,6 +529,20 @@ def list_companies(query="", pool=None, country=None, sells_deye=None, has_email
         "SUM(CASE WHEN status='synced' THEN 1 ELSE 0 END) AS synced "
         "FROM gmail_contacts GROUP BY main_id").fetchall():
         gmap[g["main_id"]] = (g["total"], g["synced"] or 0)
+
+    # 批量取各企业的无效邮箱（open 无效邮箱异常 + gmail_contacts invalid），
+    # 供企业卡在邮箱上标注 ⛔ 已标无效，避免对死地址重复发信
+    imap = {}
+    for a in conn.execute(
+        "SELECT main_id, email FROM email_anomalies "
+        "WHERE email IS NOT NULL AND email != '' AND status='open'").fetchall():
+        if a["main_id"]:
+            imap.setdefault(a["main_id"], set()).add(a["email"].strip().lower())
+    for g in conn.execute(
+        "SELECT main_id, email FROM gmail_contacts "
+        "WHERE status='invalid' AND email IS NOT NULL AND email != ''").fetchall():
+        if g["main_id"]:
+            imap.setdefault(g["main_id"], set()).add(g["email"].strip().lower())
     conn.close()
 
     for r in rows:
@@ -421,6 +558,7 @@ def list_companies(query="", pool=None, country=None, sells_deye=None, has_email
         r["gmail_contacts_total"] = total
         r["gmail_contacts_synced"] = synced
         r["gmail_synced"] = synced > 0
+        r["invalid_emails"] = sorted(imap.get(r["main_id"], set()))
     return rows
 
 
@@ -748,7 +886,7 @@ def save_country_score(mr_id, country, score, positives="", negatives="",
                        risks="", sources="", dimensions=None, db_path=None):
     """保存/更新某国家热度研判（UPSERT）。score 须 0-100 整数。
 
-    dimensions: 7 维度判断依据 dict {维度名: 依据一句话}（判断依据详情用）。"""
+    dimensions: 9 维度判断依据 dict {维度名: 依据一句话}（判断依据详情用）。"""
     try:
         score = int(score)
     except (TypeError, ValueError):
@@ -812,7 +950,7 @@ def get_research(mr_id, db_path=None):
 
 
 def get_country_detail(mr_id, country, db_path=None):
-    """取某国家在市调任务中的完整研判（含 7 维度判断依据）。"""
+    """取某国家在市调任务中的完整研判（含 9 维度判断依据）。"""
     data = get_research(mr_id, db_path=db_path)
     country = (country or "").strip().upper()
     for s in data["scores"]:
@@ -827,6 +965,114 @@ def latest_research_ranking(db_path=None):
     if not items:
         return None
     return get_research(items[0]["mr_id"], db_path=db_path)
+
+
+# 各国开发进度页的数据源识别口径（与抓取脚本输出一致，2026-09-12 WorkBuddy）
+#   gmaps   — source_url 含 google.com/maps 或 google_maps_url 非空（fetch_gmaps.py）
+#   enf     — profile_url / source_url 含 enfsolar.com（fetch_enf.py）
+#   search  — 其余非空 source_url（search_leads.py / AnySearch 搜索命中）
+#   unknown — 无任何来源链接（手工录入或来源丢失）
+SOURCE_PATTERNS = ("gmaps", "enf", "search", "unknown")
+
+
+def _classify_source(row):
+    su = (row["source_url"] or "").lower()
+    pu = (row["profile_url"] or "").lower()
+    if "google.com/maps" in su or (row["google_maps_url"] or "").strip():
+        return "gmaps"
+    if "enfsolar" in pu or "enfsolar" in su:
+        return "enf"
+    if su:
+        return "search"
+    return "unknown"
+
+
+def get_country_progress(db_path=None):
+    """各国开发进度总览：市调热度/TAM + 各数据源已挖企业数 + 质量覆盖。
+
+    返回 {"task": 市调任务 dict 或 None, "countries": [..], "grand_total": int}
+    每国行：country/country_name/score/tam(文本)/tam_num(首个数字,可 None)/
+           total/by_source{gmaps,enf,search,unknown}/with_email/
+           grades{A,B,C}/pools{池: n}/latest_seen/mr_id
+    无市调时 score/tam 为 None，只按企业库统计；排序：热度分降序 → 企业数降序。"""
+    conn = init_db(db_path)
+    try:
+        # 最新市调任务的各国得分 + TAM（潜在客户总量维度文本）
+        task = conn.execute(
+            "SELECT * FROM market_tasks ORDER BY started_at DESC LIMIT 1").fetchone()
+        scores = {}
+        if task:
+            for r in conn.execute(
+                    "SELECT * FROM country_scores WHERE mr_id=?", (task["mr_id"],)):
+                d = dict(r)
+                dims = _parse_json(d.get("dimensions")) or {}
+                tam = (dims.get("潜在客户总量") or "").strip()
+                m = re.search(r"\d[\d,\.]*", tam)
+                tam_num = None
+                if m:
+                    try:
+                        tam_num = int(float(m.group(0).replace(",", "")))
+                    except ValueError:
+                        tam_num = None
+                scores[d["country"]] = {
+                    "score": d["score"], "tam": tam, "tam_num": tam_num,
+                }
+
+        # 企业库按 国家 x 数据源 聚合
+        agg = {}
+        for row in conn.execute(
+                "SELECT country, source_url, profile_url, google_maps_url, email, "
+                "grade, pool, last_seen_at, first_seen_at FROM companies"):
+            c = (row["country"] or "?").strip().upper()
+            a = agg.setdefault(c, {
+                "total": 0, "by_source": {k: 0 for k in SOURCE_PATTERNS},
+                "with_email": 0, "grades": {}, "pools": {}, "latest_seen": "",
+            })
+            a["total"] += 1
+            a["by_source"][_classify_source(row)] += 1
+            if (row["email"] or "").strip():
+                a["with_email"] += 1
+            g = (row["grade"] or "").strip().upper()
+            if g:
+                a["grades"][g] = a["grades"].get(g, 0) + 1
+            p = (row["pool"] or "").strip()
+            if p:
+                a["pools"][p] = a["pools"].get(p, 0) + 1
+            seen = row["last_seen_at"] or row["first_seen_at"] or ""
+            if seen > a["latest_seen"]:
+                a["latest_seen"] = seen
+
+        mr_id = task["mr_id"] if task else None
+        countries = []
+        for c in set(scores) | set(agg):
+            s = scores.get(c, {})
+            a = agg.get(c, {"total": 0, "by_source": {k: 0 for k in SOURCE_PATTERNS},
+                            "with_email": 0, "grades": {}, "pools": {},
+                            "latest_seen": ""})
+            countries.append({
+                "country": c,
+                "country_name": COUNTRY_NAMES.get(c, c),
+                "mr_id": mr_id,
+                "score": s.get("score"),
+                "tam": s.get("tam", ""),
+                "tam_num": s.get("tam_num"),
+                "total": a["total"],
+                "by_source": a["by_source"],
+                "with_email": a["with_email"],
+                "grades": a["grades"],
+                "pools": a["pools"],
+                "latest_seen": a["latest_seen"][:10],
+            })
+        countries.sort(key=lambda x: (x["score"] is None,
+                                      -(x["score"] or 0), -x["total"]))
+        grand_total = sum(c["total"] for c in countries)
+        task_d = None
+        if task:
+            task_d = dict(task)
+            task_d["countries_list"] = json.loads(task_d.get("countries") or "[]")
+        return {"task": task_d, "countries": countries, "grand_total": grand_total}
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -872,9 +1118,10 @@ def scan_no_email_anomalies(task_id=None, db_path=None):
             continue
         reason = analyze_no_email_reason(r)
         conn.execute(
-            "INSERT INTO email_anomalies (main_id, task_id, company_name, country, reason, status, created_at) "
-            "VALUES (?,?,?,?,?, 'open', ?)",
-            (r["main_id"], task_id, r["company_name"], r["country"], reason, now))
+            "INSERT INTO email_anomalies (main_id, task_id, company_name, country, reason, status, "
+            "created_at, operator, updated_at) VALUES (?,?,?,?,?, 'open', ?, ?, ?)",
+            (r["main_id"], task_id, r["company_name"], r["country"], reason, now,
+             "自动(无邮箱扫描)", now))
         new += 1
     conn.commit()
     conn.close()
@@ -921,6 +1168,17 @@ def list_email_anomalies(status="open", limit=None, db_path=None):
         sql += " LIMIT ?"
         params.append(limit)
     rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    # 附加 skill 分组（无效邮箱 → gmail_contacts.skill_group；同邮箱多企业时合并去重展示）
+    if rows:
+        smap = {}
+        for g in conn.execute(
+            "SELECT lower(email) AS lem, GROUP_CONCAT(DISTINCT skill_group) AS groups "
+            "FROM gmail_contacts WHERE email IS NOT NULL AND email != '' "
+            "AND skill_group IS NOT NULL AND skill_group != '' "
+            "GROUP BY lower(email)").fetchall():
+            smap[g["lem"]] = g["groups"]
+        for r in rows:
+            r["skill_groups"] = smap.get((r.get("email") or "").strip().lower(), "")
     conn.close()
     return rows
 
@@ -938,17 +1196,21 @@ def resolve_email_anomaly(anomaly_id, resolved=True, db_path=None):
 
 
 def mark_email_invalid(email, reason=None, main_id=None, company_name=None,
-                       country=None, db_path=None):
+                       country=None, operator=None, db_path=None):
     """标记某邮箱为无效（bounce 550 User doesn't exist 等），落 email_anomalies。
 
     无效邮箱（email 非空）与「无邮箱」异常（email 空）同表，同步联系人时按
     email 非空 + status=open 过滤跳过。幂等：同邮箱已有 open 记录则更新 reason 后
-    返回既有 id，不重复建。返回 anomaly id。
+    返回既有 id，不重复建。操作日志：operator 记谁标的（自动(bounce管线)/人工(webui)），
+    created_at=首次标记时间（不覆盖），updated_at=最后操作时间（重复标记时刷新）。
+    返回 anomaly id。
     """
     email = (email or "").strip().lower()
     if not email or "@" not in email:
         raise ValueError(f"非法邮箱: {email!r}")
     reason = reason or "bounce: User doesn't exist"
+    operator = operator or "未注明"
+    now = now_iso()
     conn = init_db(db_path)
     # 传了 main_id 但没传公司名/国家时，自动从企业表补，保证异常记录自描述
     if main_id and (not company_name or not country):
@@ -965,20 +1227,21 @@ def mark_email_invalid(email, reason=None, main_id=None, company_name=None,
         if row["reason"] != reason:
             conn.execute("UPDATE email_anomalies SET reason=? WHERE id=?",
                          (reason, row["id"]))
-        # 回填历史记录缺失的 main_id/公司名/国家
+        # 回填历史记录缺失的 main_id/公司名/国家；operator/updated_at 记本次操作
         conn.execute(
             "UPDATE email_anomalies SET main_id=COALESCE(NULLIF(main_id,''), ?), "
             "company_name=COALESCE(NULLIF(company_name,''), ?), "
-            "country=COALESCE(NULLIF(country,''), ?) WHERE id=?",
-            (main_id, company_name, country, row["id"]))
+            "country=COALESCE(NULLIF(country,''), ?), "
+            "operator=?, updated_at=? WHERE id=?",
+            (main_id, company_name, country, operator, now, row["id"]))
         conn.commit()
         anomaly_id = row["id"]
     else:
-        now = now_iso()
         cur = conn.execute(
             "INSERT INTO email_anomalies (main_id, task_id, company_name, country, "
-            "email, reason, status, created_at) VALUES (?,?,?,?,?,?, 'open', ?)",
-            (main_id, None, company_name, country, email, reason, now))
+            "email, reason, status, created_at, operator, updated_at) "
+            "VALUES (?,?,?,?,?,?, 'open', ?, ?, ?)",
+            (main_id, None, company_name, country, email, reason, now, operator, now))
         conn.commit()
         anomaly_id = cur.lastrowid
     conn.close()
@@ -1014,6 +1277,23 @@ def get_invalid_email_set(db_path=None):
     return s
 
 
+def get_send_exclude_set(db_path=None):
+    """发送前排除邮箱集合：email_anomalies.email(open) ∪ gmail_contacts.email(status='invalid')。
+
+    群发脚本发送前调用，过滤已确认无效（bounce 退信）或已标 invalid 的邮箱，避免
+    单个坏邮箱拖累整批、拉低域信誉（提案 4）。返回小写邮箱 set。
+    """
+    conn = init_db(db_path)
+    s = {r["email"].lower() for r in conn.execute(
+        "SELECT email FROM email_anomalies "
+        "WHERE email IS NOT NULL AND email != '' AND status='open'")}
+    s |= {r["email"].lower() for r in conn.execute(
+        "SELECT email FROM gmail_contacts "
+        "WHERE status='invalid' AND email IS NOT NULL AND email != ''")}
+    conn.close()
+    return s
+
+
 # ---------------------------------------------------------------------------
 # 邮件处理 review 队列（WorkBuddy 对接，契约见 spec.json）
 # WorkBuddy 拉信 → 硬编码提取元数据 → LLM 机械分类 → 调本段函数写 email_review。
@@ -1025,7 +1305,8 @@ def record_email_review(message_id, from_address="", to_address="", subject="",
                         classification="", confidence=None, rule_id="",
                         matched_main_id=None, matched_email="",
                         proposed_action="", action_detail="", status="review",
-                        db_path=None, **kwargs):
+                        ai_analysis="", sub_label="", bounced_recipient="",
+                        matched_by="", db_path=None, **kwargs):
     """UPSERT 一封邮件处理结果（按 message_id 幂等），自动补 created_at。
 
     WorkBuddy 写 email_review 的入口；status 默认 'review'（需人工/Claude 审）。
@@ -1042,8 +1323,9 @@ def record_email_review(message_id, from_address="", to_address="", subject="",
     conn.execute(
         "INSERT INTO email_review (message_id, from_address, to_address, subject, "
         "mail_date, body_snippet, in_reply_to, classification, confidence, rule_id, "
-        "matched_main_id, matched_email, proposed_action, action_detail, status, created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "matched_main_id, matched_email, proposed_action, action_detail, status, "
+        "ai_analysis, sub_label, bounced_recipient, matched_by, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(message_id) DO UPDATE SET "
         "from_address=excluded.from_address, to_address=excluded.to_address, "
         "subject=excluded.subject, mail_date=excluded.mail_date, "
@@ -1051,10 +1333,16 @@ def record_email_review(message_id, from_address="", to_address="", subject="",
         "classification=excluded.classification, confidence=excluded.confidence, "
         "rule_id=excluded.rule_id, matched_main_id=excluded.matched_main_id, "
         "matched_email=excluded.matched_email, proposed_action=excluded.proposed_action, "
-        "action_detail=excluded.action_detail, status=excluded.status",
+        "action_detail=excluded.action_detail, status=excluded.status, "
+        # ai_analysis 由 LLM 批量回写（update_email_review_analysis），管线每日重跑
+        # UPSERT 会带空值覆盖它——用 COALESCE 保旧值：新值非空才覆盖（否则丢 LLM 复核）。
+        "ai_analysis=COALESCE(NULLIF(excluded.ai_analysis, ''), email_review.ai_analysis), "
+        "sub_label=excluded.sub_label, "
+        "bounced_recipient=excluded.bounced_recipient, matched_by=excluded.matched_by",
         (message_id, from_address, to_address, subject, mail_date, body_snippet,
          in_reply_to, classification, confidence, rule_id, matched_main_id,
-         matched_email, proposed_action, action_detail, status, now))
+         matched_email, proposed_action, action_detail, status, ai_analysis,
+         sub_label, bounced_recipient, matched_by, now))
     conn.commit()
     rid = conn.execute("SELECT id FROM email_review WHERE message_id=?",
                        (message_id,)).fetchone()["id"]
@@ -1103,6 +1391,136 @@ def resolve_email_review(review_id, status="applied", reviewer="人工", db_path
     updated = cur.rowcount
     conn.close()
     return {"review_id": review_id, "status": status, "updated": updated}
+
+
+def update_email_review_analysis(review_id, ai_analysis, operator="WorkBuddy",
+                                 db_path=None):
+    """回写某条 email_review 的 LLM 复核分析（WorkBuddy 每日批量生成后调用）。
+
+    双引擎：规则引擎给 classification/confidence 初判，LLM 给 ai_analysis 复核意见，
+    各写各的列，互不覆盖。本函数只写 ai_analysis，不碰 status/reviewer（人审状态
+    由 resolve_email_review 负责）。operator 供将来审计留痕，暂不落库。
+    返回 {review_id, updated}。
+    """
+    conn = init_db(db_path)
+    cur = conn.execute(
+        "UPDATE email_review SET ai_analysis=? WHERE id=?", (ai_analysis, review_id))
+    conn.commit()
+    updated = cur.rowcount
+    conn.close()
+    return {"review_id": review_id, "updated": updated}
+
+
+def _op_ts(t):
+    """操作日志时间 → 时间戳（打包分组用，解析失败返回 0）。"""
+    try:
+        return datetime.fromisoformat(str(t)).timestamp()
+    except Exception:
+        return 0.0
+
+
+def list_operation_log(limit=100, db_path=None):
+    """统一操作日志（自动 + 人工）：聚合四类操作的留痕，按时间倒序。
+
+    来源与语义：
+      pool_log        → 换池（operator: 人工(webui)/脚本名）        kind=换池
+      email_review    → 邮件审核（reviewer 非空且已出队列）         kind=邮件审核
+      email_anomalies → 标无效邮箱/划无邮箱异常（operator 非空）    kind=标无效邮箱 / 无邮箱扫描
+      diffs           → 差异审核（reviewer 非空）                   kind=差异审核
+    同一 (kind, actor) 时间相邻（≤180s）的 ≥3 条操作自动打包成一条
+    （2026-09-12 WorkBuddy 加，用户要求：批量审核别把日志挤爆）。
+    返回 [{time, actor, kind, auto, target, detail, ref, count}]，auto=True 表示自动操作。
+    """
+    conn = init_db(db_path)
+    ops = []
+    q = limit * 3  # 各来源多取些，打包后再截断，避免批量操作把额度吃光
+
+    for r in conn.execute(
+        "SELECT p.*, c.company_name FROM pool_log p "
+        "LEFT JOIN companies c ON p.main_id=c.main_id ORDER BY p.changed_at DESC LIMIT ?",
+        (q,)):
+        ops.append({"time": r["changed_at"], "actor": r["operator"] or "未注明",
+                    "kind": "换池", "ref": r["main_id"],
+                    "target": f"{r['company_name'] or r['main_id']}",
+                    "detail": f"{r['from_pool']} → {r['to_pool']}" + (f"（{r['note']}）" if r["note"] else "")})
+
+    for r in conn.execute(
+        "SELECT er.id, er.reviewed_at, er.reviewer, er.status, er.rule_id, "
+        "er.classification, er.subject, c.company_name, er.matched_main_id "
+        "FROM email_review er LEFT JOIN companies c ON er.matched_main_id=c.main_id "
+        "WHERE er.reviewed_at IS NOT NULL AND er.reviewer IS NOT NULL AND er.status != 'review' "
+        "ORDER BY er.reviewed_at DESC LIMIT ?", (q,)):
+        act = "已处理" if r["status"] == "applied" else "已忽略"
+        ops.append({"time": r["reviewed_at"], "actor": r["reviewer"], "kind": "邮件审核",
+                    "ref": r["matched_main_id"],
+                    "target": (r["company_name"] or r["subject"] or "")[:40],
+                    "detail": f"[{r['rule_id'] or '?'} {r['classification'] or '?'}] {act}"})
+
+    for r in conn.execute(
+        "SELECT a.id, a.email, a.company_name, a.main_id, a.reason, a.operator, "
+        "COALESCE(a.updated_at, a.created_at) AS op_time, a.status FROM email_anomalies a "
+        "WHERE a.operator IS NOT NULL ORDER BY op_time DESC LIMIT ?", (q,)):
+        kind = "标无效邮箱" if (r["email"] or "").strip() else "无邮箱扫描"
+        detail = (r["reason"] or "")[:60]
+        if r["status"] == "resolved":
+            detail = "已解决 · " + detail
+        ops.append({"time": r["op_time"], "actor": r["operator"], "kind": kind,
+                    "ref": r["main_id"],
+                    "target": r["email"] or (r["company_name"] or "")[:30],
+                    "detail": detail})
+
+    for r in conn.execute(
+        "SELECT d.id, d.reviewed_at, d.reviewer, d.main_id, d.field, d.old_value, d.new_value, "
+        "d.status, c.company_name FROM diffs d LEFT JOIN companies c ON d.main_id=c.main_id "
+        "WHERE d.reviewed_at IS NOT NULL AND d.reviewer IS NOT NULL "
+        "ORDER BY d.reviewed_at DESC LIMIT ?", (q,)):
+        approve = "采纳" if r["status"] == "approved" else "忽略"
+        ops.append({"time": r["reviewed_at"], "actor": r["reviewer"], "kind": "差异审核",
+                    "ref": r["main_id"],
+                    "target": (r["company_name"] or r["main_id"] or "")[:30],
+                    "detail": f"{r['field']}: {str(r['old_value'] or '')[:30]} → {str(r['new_value'] or '')[:30]} ({approve})",
+                    "_field": r["field"], "_status": r["status"]})
+
+    conn.close()
+    for o in ops:
+        o["auto"] = str(o["actor"]).startswith("自动")
+        t = str(o["time"] or "")
+        o["time_fmt"] = t[:16].replace("T", " ") if len(t) >= 16 else t
+    ops.sort(key=lambda x: str(x["time"] or ""), reverse=True)
+
+    # ---- 同类操作打包：同 (kind, actor) 且时间相邻 ≤180s 的 ≥3 条合并为一条 ----
+    packaged = []
+    i = 0
+    while i < len(ops):
+        j = i + 1
+        while (j < len(ops) and ops[j]["kind"] == ops[i]["kind"]
+               and ops[j]["actor"] == ops[i]["actor"]
+               and abs(_op_ts(ops[j]["time"]) - _op_ts(ops[i]["time"])) <= 180):
+            j += 1
+        grp = ops[i:j]
+        if len(grp) >= 3:
+            head = dict(grp[0])
+            n = len(grp)
+            if head["kind"] == "差异审核":
+                approved = sum(1 for g in grp if g.get("_status") == "approved")
+                fields = {}
+                for g in grp:
+                    f = g.get("_field") or "?"
+                    fields[f] = fields.get(f, 0) + 1
+                dist = " · ".join(f"{k}×{v}" for k, v in
+                                  sorted(fields.items(), key=lambda kv: -kv[1]))
+                head["detail"] = f"批量审核 {n} 条：采纳 {approved} · 忽略 {n - approved}（{dist}）"
+            else:
+                head["detail"] = f"{grp[0]['detail']} 等 {n} 条同类操作"
+            head["target"] = f"批量 {n} 项"
+            head["ref"] = None
+            head["count"] = n
+            packaged.append(head)
+        else:
+            packaged.extend(grp)
+        i = j
+    packaged.sort(key=lambda x: str(x["time"] or ""), reverse=True)
+    return packaged[:limit]
 
 
 def mark_contact_invalid(email, error=None, db_path=None):

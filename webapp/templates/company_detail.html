@@ -110,7 +110,7 @@
       <td><a href="mailto:{{ e }}">{{ e }}</a></td>
       <td><code>{{ company.country }} {{ company.main_id }} {{ company.company_name }} #{{ loop.index }}</code></td>
       <td>{% if synced %}<span style="color:#16a34a;font-weight:700;">✓ 已加</span>{% elif invalid %}<span style="color:#b91c1c;font-weight:700;">已删除/无效</span>{% elif gc %}<span style="color:#d97706;">待同步/失败</span>{% else %}<span style="color:#6b7280;">未同步</span>{% endif %}</td>
-      <td>{% if synced %}{{ synced[0].skill_group or '未分组' }}{% else %}—{% endif %}</td>
+      <td>{% if gc %}{{ (synced or gc)[0].skill_group or '未分组' }}{% else %}—{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>

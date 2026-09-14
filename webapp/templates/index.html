@@ -22,6 +22,27 @@
   {% endfor %}
 </div>
 
+<h2>最近操作 <a href="{{ url_for('operations') }}" style="font-size:14px;font-weight:400;">查看全部 →</a></h2>
+{% if recent_ops %}
+<table>
+  <thead><tr><th style="width:130px;">时间</th><th style="width:70px;">类型</th><th style="width:100px;">操作</th><th style="width:230px;">对象</th><th>说明</th><th style="width:150px;">操作者</th></tr></thead>
+  <tbody>
+  {% for o in recent_ops %}
+    <tr>
+      <td>{{ o.time_fmt or '—' }}</td>
+      <td>{% if o.auto %}<span style="display:inline-block;background:#dbeafe;color:#1d4ed8;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">自动</span>{% else %}<span style="display:inline-block;background:#fef3c7;color:#b45309;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">人工</span>{% endif %}</td>
+      <td>{{ o.kind }}</td>
+      <td>{% if o.ref %}<a href="{{ url_for('company_detail', main_id=o.ref) }}">{{ o.target }}</a>{% else %}{{ o.target }}{% endif %}</td>
+      <td style="font-size:12px;color:#555;">{{ o.detail }}</td>
+      <td>{{ o.actor }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">暂无操作记录。换池 / 邮件审核 / 标无效 / 扫描等操作发生后会自动出现在这里。</p>
+{% endif %}
+
 <h2>任务列表</h2>
 {% if tasks %}
 <table>

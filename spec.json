@@ -1,6 +1,6 @@
 {
-  "spec_version": "1.1.0",
-  "updated_at": "2026-09-10",
+  "spec_version": "1.2.0",
+  "updated_at": "2026-09-12",
   "db_path": "D:/Agent/git/google-map-lead-filter/data/leads.db",
   "db_mode": "wal",
   "_db_mode_note": "连接时设 PRAGMA journal_mode=WAL + busy_timeout=5000，缓解读写并发；仍保持单写者纪律（见 ownership）",
@@ -23,11 +23,11 @@
   "write_boundary": {
     "email_review": {
       "note": "主写表：每封邮件一条，附审计字段。低置信度/需人工判断的落 status=review 进队列",
-      "writable_fields": ["message_id", "from_address", "to_address", "subject", "mail_date", "body_snippet", "in_reply_to", "classification", "confidence", "rule_id", "matched_main_id", "matched_email", "proposed_action", "action_detail", "status", "created_at"]
+      "writable_fields": ["message_id", "from_address", "to_address", "subject", "mail_date", "body_snippet", "in_reply_to", "classification", "confidence", "rule_id", "matched_main_id", "matched_email", "proposed_action", "action_detail", "status", "created_at", "ai_analysis", "sub_label", "bounced_recipient", "matched_by"]
     },
     "email_anomalies": {
-      "note": "仅 bounce 退信时新增一条无效邮箱记录",
-      "writable_fields": ["main_id", "email", "reason", "status"],
+      "note": "仅 bounce 退信时新增一条无效邮箱记录；operator/updated_at 为操作日志列（谁标的 + 最后操作时间），由 mark_email_invalid / scan_no_email_anomalies 写入",
+      "writable_fields": ["main_id", "email", "reason", "status", "operator", "updated_at"],
       "readonly_fields": ["id", "task_id", "company_name", "country", "created_at", "resolved_at"]
     },
     "gmail_contacts": {
@@ -59,7 +59,11 @@
       "status": "TEXT DEFAULT 'review'",
       "created_at": "TEXT",
       "reviewed_at": "TEXT",
-      "reviewer": "TEXT"
+      "reviewer": "TEXT",
+      "ai_analysis": "TEXT",
+      "sub_label": "TEXT",
+      "bounced_recipient": "TEXT",
+      "matched_by": "TEXT"
     },
     "indexes": ["idx_email_review_status ON email_review(status)", "idx_email_review_main ON email_review(matched_main_id)"]
   },
@@ -99,7 +103,7 @@
       "rule_id": "R2",
       "label": "auto_reply",
       "priority": 2,
-      "signals": "subject 含 Out of Office / Automatic reply / 自动回复 / Auto:，或 body 含 out of office / vacation / holiday / away from",
+      "signals": "subject 含 Out of Office / Automatic reply / 自动回复 / Auto:，或 body 含 out of office / vacation / holiday / away from；工单系统自动回执(Message-ID/List-ID 含 zendesk.com/freshdesk/intercom/helpdesk)优先让位 R7",
       "action": "no_action：写 email_review 记录即可，不改池不改状态",
       "confidence_note": "高置信"
     },
@@ -124,8 +128,8 @@
       "label": "normal_reply",
       "priority": 4,
       "signals": "在回复我们群发(in_reply_to 有值) + 内容涉及产品询价/合作/要 catalog/报价/问库存",
-      "action": "transfer_review：写 email_review(status=review)，建议人工归「潜在客户(已取得联系)」",
-      "confidence_note": "中，需人工确认换池"
+      "action": "transfer_review：命中询价/合作关键词(conf≥0.75)时建议人工归「潜在客户(已取得联系)」；仅 in_reply_to 有值未命中关键词(0.55 兜底)→no_action(仍 status=review 供人工看，绝不建议换池)",
+      "confidence_note": "中，需人工确认换池；0.55 兜底不自动建议换池"
     },
     {
       "rule_id": "R6",

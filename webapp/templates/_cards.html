@@ -57,9 +57,14 @@
     {%- if c.phone %}<a class="chip phone" href="tel:{{ c.phone }}">📞 {{ c.phone }}</a>{% endif %}
     {%- if c.wa_url %}<a class="chip wa" href="{{ c.wa_url }}" target="_blank">WhatsApp</a>{% endif %}
     {%- if c.website %}<a class="chip site" href="{{ c.website }}" target="_blank">官网</a>{% endif %}
+    {%- set inv = c.invalid_emails or [] -%}
     {%- if c.email_count %}
     <span class="chip email-count">📧 {{ c.email_count }} 邮箱</span>
-      {%- for e in c.email_list[:3] %}<a class="chip" href="mailto:{{ e }}" title="{{ e }}">{{ e }}</a>{% endfor %}
+      {%- if inv %}<span class="chip email-invalid-count" title="{{ inv | join('、') }} 已标无效（退信/人工确认），勿再发信；明细见异常邮箱页">⛔ {{ inv | length }} 无效</span>{% endif %}
+      {%- for e in c.email_list[:3] %}
+        {%- if e | lower in inv %}<a class="chip email-invalid" href="mailto:{{ e }}" title="{{ e }} 已标无效（退信/人工确认），勿再发信">✉️ {{ e }} ⛔</a>
+        {%- else %}<a class="chip" href="mailto:{{ e }}" title="{{ e }}">{{ e }}</a>{% endif %}
+      {%- endfor %}
       {%- if c.email_count > 3 %}<span class="chip muted">+{{ c.email_count - 3 }}</span>{% endif %}
       {%- if c.gmail_synced %}<span class="chip gmail-synced" title="已加进企业邮箱联系人">✓ 已同步</span>
       {%- else %}<span class="chip gmail-pending" title="尚未加进企业邮箱联系人">未同步</span>{% endif %}

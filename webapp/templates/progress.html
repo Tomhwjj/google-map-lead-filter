@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}各国开发进度{% endblock %}
+{% block content %}
+<h1>各国开发进度</h1>
+<p class="hint">
+  对照市调热度与潜在客户总量（TAM），展示<b>每个国家已从哪些数据源挖到多少企业</b>——
+  Maps / ENF / 搜索 / 未知（手工或来源丢失）。国家名可点进该国的企业库列表；
+  数据源口径见 <code>core.get_country_progress</code>。
+  {% if task %}
+    市调参照：<code>{{ task.mr_id }}</code>
+    <a href="{{ url_for('research_detail', mr_id=task.mr_id) }}">录入/更新研判</a>
+  {% endif %}
+  全库合计 <b>{{ grand_total }}</b> 家企业。
+</p>
+
+{% if not countries %}
+<p class="empty">企业库还是空的——先去<a href="{{ url_for('research') }}">市调</a>挑国家，或直接跑采集脚本。</p>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th style="width:130px;">国家 / 热度</th>
+      <th style="width:210px;">潜在客户总量 (TAM)</th>
+      <th style="width:170px;">已挖企业 / 覆盖率</th>
+      <th style="text-align:center;">🗺️ Maps</th>
+      <th style="text-align:center;">☀️ ENF</th>
+      <th style="text-align:center;">🔍 搜索</th>
+      <th style="text-align:center;">❔ 未知</th>
+      <th style="text-align:center;">📧 有邮箱</th>
+      <th style="width:110px;">评级 A/B/C</th>
+      <th style="width:150px;">客户池分布</th>
+      <th style="width:90px;">最新入库</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for c in countries %}
+    {% set scolor = '#16a34a' if c.score and c.score >= 80 else ('#d97706' if c.score and c.score >= 60 else '#9ca3af') %}
+    {% set pct = (c.total * 100 / c.tam_num) | round(1) if c.tam_num else none %}
+    <tr>
+      <td>
+        <a href="{{ url_for('companies', country=c.country) }}"><b>{{ c.country_name }}</b> ({{ c.country }})</a>
+        <div style="font-size:18px;font-weight:700;color:{{ scolor }};">{{ c.score if c.score is not none else '—' }}<span style="font-size:11px;color:#9ca3af;font-weight:400;"> 热度</span></div>
+      </td>
+      <td style="font-size:12px;color:#555;">
+        {% if c.tam %}{{ c.tam[:120] }}{% if c.tam | length > 120 %}…{% endif %}
+        {% else %}<span style="color:#c4c9d0;">— 市调未录入（9 维新字段）</span>{% endif %}
+      </td>
+      <td>
+        <b style="font-size:16px;">{{ c.total }}</b> 家
+        {% if pct is not none %}
+          <div style="background:#eef1f5;border-radius:6px;height:8px;margin-top:4px;overflow:hidden;">
+            <div style="background:{{ '#16a34a' if pct >= 60 else ('#d97706' if pct >= 20 else '#60a5fa') }};height:100%;width:{{ [pct, 100] | min }}%;"></div>
+          </div>
+          <div style="font-size:11px;color:#9ca3af;margin-top:2px;">TAM 覆盖 {{ pct }}%</div>
+        {% endif %}
+      </td>
+      <td style="text-align:center;">{{ c.by_source.gmaps or '·' }}</td>
+      <td style="text-align:center;">{{ c.by_source.enf or '·' }}</td>
+      <td style="text-align:center;">{{ c.by_source.search or '·' }}</td>
+      <td style="text-align:center;color:{% if c.by_source.unknown %}#b45309{% else %}#c4c9d0{% endif %};">{{ c.by_source.unknown or '·' }}</td>
+      <td style="text-align:center;">
+        {{ c.with_email }}
+        <span style="font-size:11px;color:#9ca3af;">({{ (c.with_email * 100 / c.total) | round(0) | int if c.total else 0 }}%)</span>
+      </td>
+      <td style="font-size:12px;">
+        <span style="color:#16a34a;font-weight:600;">A{{ c.grades.get('A', 0) }}</span> /
+        <span style="color:#d97706;font-weight:600;">B{{ c.grades.get('B', 0) }}</span> /
+        <span style="color:#9ca3af;">C{{ c.grades.get('C', 0) }}</span>
+      </td>
+      <td style="font-size:11px;color:#555;">
+        {% for p, n in c.pools.items() | sort(attribute=1) | reverse %}
+          {{ p }} {{ n }}{% if not loop.last %} · {% endif %}
+        {% endfor %}
+      </td>
+      <td style="font-size:12px;color:#9ca3af;">{{ c.latest_seen or '—' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<p class="hint" style="margin-top:14px;">
+  💡 覆盖率低 + 热度高的国家 = 扩量优先级最高。当前主要缺口补法：
+  ENF 全量抓取（<code>fetch_enf.py</code>，去掉 --max）、Maps 矩阵全量跑（<code>fetch_gmaps.py --queries-file --locale</code>）、
+  品牌 Find-a-Distributor 页（<code>list_scraper.py</code>，尚未启用）。
+</p>
+{% endif %}
+{% endblock %}

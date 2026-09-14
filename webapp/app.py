@@ -15,7 +15,7 @@
   /research             市调排名看板（一键「开始市调」28 国 + 前10优先 + 单国详情）
   /research/start       一键开始市调（POST，默认欧盟 27 国 + 乌克兰）
   /research/<mr_id>     市调详情（各国热度研判录入 + 得分排序 + 复盘报告）
-  /research/<mr_id>/country/<country>  单国研判详情（7 维度判断依据）
+  /research/<mr_id>/country/<country>  单国研判详情（9 维度判断依据）
 
 启动:
     python webapp/app.py        # 端口 8766，自动打开浏览器
@@ -35,11 +35,14 @@ SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
 from core import (RESEARCH_DIMS, build_report, change_pool, finish_research,
-                  get_company, get_country_detail, get_research, get_email_account,
+                  get_company, get_country_detail, get_country_progress, get_research,
+                  get_email_account,
                   gmail_sync_stats, latest_research_ranking, list_companies,
                   list_countries, list_diff_groups, list_email_anomalies,
-                  list_email_review, list_gmail_contacts, list_pool_log, list_research,
-                  list_task_issues, list_tasks, pool_stats, resolve_email_anomaly,
+                  list_email_review, list_gmail_contacts, list_operation_log,
+                  list_pool_log, list_research,
+                  list_task_issues, list_tasks, mark_contact_invalid,
+                  mark_email_invalid, pool_stats, resolve_email_anomaly,
                   resolve_email_review, review_diff, save_country_score,
                   save_email_account, scan_no_email_anomalies, start_research,
                   start_task)
@@ -93,9 +96,11 @@ def index():
     conn.close()
     stats = pool_stats()
     open_issues = len(list_task_issues(status="open"))
+    recent_ops = list_operation_log(limit=8)
     return render_template("index.html", tasks=tasks, total_companies=total_companies,
                            pending_diffs=pending_diffs, running_tasks=running_tasks,
-                           open_issues=open_issues, pool_stats=stats, pools=POOLS)
+                           open_issues=open_issues, pool_stats=stats, pools=POOLS,
+                           recent_ops=recent_ops)
 
 
 @app.route("/tasks/start/<country>", methods=["POST"])
@@ -292,22 +297,132 @@ def gmail_sync():
 
 @app.route("/email-anomalies", methods=["GET"])
 def email_anomalies():
+    """旧入口重定向到无效邮箱子页。"""
+    return redirect(url_for("email_anomalies_invalid"))
+
+
+def _load_sent_times():
+    """无效邮箱的真实发送时间（wb_sent_times_backfill.py 从 Gmail 已发邮件补全）。"""
+    path = os.path.join(PROJECT_ROOT, "data", "wb_sent_times.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _invalid_rows(status):
+    """无效邮箱子页数据：异常记录 + 退信信息(email_review) + 真实发送时间(JSON)。"""
+    anomalies = list_email_anomalies(status=status or None)
+    for a in anomalies:
+        a["created_fmt"] = _fmt_dt(a.get("created_at"))
+        a["updated_fmt"] = _fmt_dt(a.get("updated_at"))
+        a["resolved_fmt"] = _fmt_dt(a.get("resolved_at"))
+
+    # 退信信息：从 email_review 弹回记录取 退信时间(mail_date)/被弹回收件人
+    import re as _re
+    from email.utils import parsedate_to_datetime
+    bounce_map = {}   # email_lower -> {"bounce_fmt":..., "kind":"退信/延迟", "_dt":dt}
+    try:
+        for r in list_email_review():
+            if (r.get("classification") or "") != "bounce":
+                continue
+            snippet = r.get("body_snippet") or ""
+            subject = r.get("subject") or ""
+            kind = "延迟警告" if "Delay" in subject else "硬退信"
+            md = (r.get("mail_date") or "").strip()
+            dt = None
+            try:
+                dt = parsedate_to_datetime(md)
+            except Exception:
+                dt = None
+            for em in set(_re.findall(r"[A-Za-z0-9._%+\-']+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", snippet)):
+                el = em.lower().strip(".")
+                if "google" in el or "googlemail.com" in el:
+                    continue
+                prev = bounce_map.get(el)
+                if prev is None or (dt and (prev.get("_dt") is None or dt > prev["_dt"])):
+                    import datetime as _d
+                    bounce_fmt = dt.astimezone(
+                        _d.timezone(_d.timedelta(hours=8))).strftime("%m-%d %H:%M") if dt else md
+                    bounce_map[el] = {"bounce_fmt": bounce_fmt, "kind": kind, "_dt": dt}
+    except Exception:
+        pass
+
+    sent_times = _load_sent_times()
+    rows = [a for a in anomalies if a.get("email")]
+    for a in rows:
+        key = a["email"].strip().lower()
+        b = bounce_map.get(key) or {}
+        a["bounce_fmt"] = b.get("bounce_fmt", "")
+        a["bounce_kind"] = b.get("kind", "")
+        st = sent_times.get(key) or {}
+        a["sent_fmt"] = st.get("sent_at", "")
+        a["sent_subject"] = st.get("subject", "")
+    rows.sort(key=lambda a: (a.get("sent_fmt") or "", a.get("bounce_fmt") or ""), reverse=True)
+    return rows
+
+
+@app.route("/email-anomalies/invalid", methods=["GET"])
+def email_anomalies_invalid():
+    """子页 1：⛔ 无效邮箱 · 纯记录（真实退信时间 + Gmail 已发记录的真实发送时间）。
+
+    筛选：skill（来源分组精确匹配）/ sent（发送时间点或 __none=未发过）/ status。
+    """
+    status = request.args.get("status", "")
+    skill_f = (request.args.get("skill") or "").strip()
+    sent_f = (request.args.get("sent") or "").strip()
+    rows = _invalid_rows(status or None)
+
+    # 筛选选项（基于全量行生成，多值 skill_groups 任一命中即可）
+    skill_opts = sorted({g.strip() for a in rows for g in (a.get("skill_groups") or "").split(",")
+                        if g.strip()})
+    sent_opts = sorted({a["sent_fmt"] for a in rows if a.get("sent_fmt")}, reverse=True)
+
+    def _hit_skill(a):
+        groups = {g.strip() for g in (a.get("skill_groups") or "").split(",") if g.strip()}
+        return skill_f in groups
+
+    if skill_f:
+        rows = [a for a in rows if _hit_skill(a)]
+    if sent_f:
+        if sent_f == "__none":
+            rows = [a for a in rows if not a.get("sent_fmt")]
+        else:
+            rows = [a for a in rows if a.get("sent_fmt") == sent_f]
+
+    return render_template("email_anomalies_invalid.html", rows=rows, status=status,
+                           n_open=sum(1 for a in rows if a.get("status") == "open"),
+                           skill_f=skill_f, sent_f=sent_f,
+                           skill_opts=skill_opts, sent_opts=sent_opts)
+
+
+@app.route("/email-anomalies/no-email", methods=["GET"])
+def email_anomalies_no_email():
+    """子页 2：📭 无邮箱 · 待分析（获客没拿到邮箱的企业，可扫描/关闭）。"""
     status = request.args.get("status", "open")
     anomalies = list_email_anomalies(status=status or None)
-    return render_template("email_anomalies.html", anomalies=anomalies, status=status)
+    for a in anomalies:
+        a["created_fmt"] = _fmt_dt(a.get("created_at"))
+        a["updated_fmt"] = _fmt_dt(a.get("updated_at"))
+        a["resolved_fmt"] = _fmt_dt(a.get("resolved_at"))
+    no_emails = [a for a in anomalies if not a.get("email")]
+    return render_template("email_anomalies_no_email.html", no_emails=no_emails,
+                           status=status)
 
 
 @app.route("/email-anomalies/scan", methods=["POST"])
 def email_anomalies_scan():
     result = scan_no_email_anomalies()
-    return redirect(url_for("email_anomalies",
+    return redirect(url_for("email_anomalies_no_email",
                             msg=f"扫描完成：无邮箱 {result['scanned']} 家，新划异常 {result['new']} 家"))
 
 
 @app.route("/email-anomalies/<int:anomaly_id>/resolve", methods=["POST"])
 def email_anomalies_resolve(anomaly_id):
     resolve_email_anomaly(anomaly_id, resolved=True)
-    return redirect(url_for("email_anomalies"))
+    next_url = request.form.get("next") or url_for("email_anomalies_no_email")
+    return redirect(next_url)
 
 
 # review 分类中文标签 + 建议目标池（审核页展示/一键换池默认值；无建议=倾向忽略）
@@ -358,11 +473,45 @@ def email_review_resolve(review_id):
         if main_id and to_pool:
             change_pool(main_id, to_pool, operator=reviewer, note=note)
         resolve_email_review(review_id, status="applied", reviewer=reviewer)
+        return redirect(url_for("email_review_list", status="review",
+                                msg="已换池并移出审核队列"))
+    elif action == "invalid":
+        # 人工确认邮箱没用 → 标无效：落 email_anomalies（无效邮箱）+ gmail_contacts.status=invalid
+        email = (request.form.get("email") or "").strip().lower()
+        reason = (request.form.get("reason") or "").strip() or "人工审核确认无效"
+        main_id = (request.form.get("main_id") or "").strip() or None
+        if not email or "@" not in email:
+            return render_template("error.html",
+                                   msg=f"标无效需要有效邮箱地址，收到: {email!r}"), 400
+        anomaly_id = mark_email_invalid(email, reason=reason, main_id=main_id,
+                                        operator=f"人工({reviewer})")
+        contact = mark_contact_invalid(email, error=reason)
+        resolve_email_review(review_id, status="applied", reviewer=reviewer)
+        return redirect(url_for(
+            "email_review_list", status="review",
+            msg=f"已标记无效邮箱 {email}（异常记录 #{anomaly_id}，操作者 人工({reviewer}），已放入异常邮箱"))
     elif action == "ignore":
         resolve_email_review(review_id, status="ignored", reviewer=reviewer)
+        return redirect(url_for("email_review_list", status="review",
+                                msg="已忽略（误判），移出审核队列"))
     else:
         resolve_email_review(review_id, status="applied", reviewer=reviewer)
-    return redirect(url_for("email_review_list", status="review"))
+        return redirect(url_for("email_review_list", status="review",
+                                msg="已处理，移出审核队列"))
+
+
+@app.route("/operations", methods=["GET"])
+def operations():
+    """操作日志全量页：自动 + 人工操作统一时间线。"""
+    ops = list_operation_log(limit=300)
+    return render_template("operations.html", ops=ops)
+
+
+@app.route("/progress", methods=["GET"])
+def country_progress():
+    """各国开发进度：市调热度 + 各数据源已挖企业数（来源口径见 core.get_country_progress）。"""
+    data = get_country_progress()
+    return render_template("progress.html", **data)
 
 
 @app.route("/research", methods=["GET"])
@@ -412,7 +561,7 @@ def research_detail(mr_id):
 
 @app.route("/research/<mr_id>/country/<country>", methods=["GET"])
 def research_country(mr_id, country):
-    """单国研判详情：热度分 + 7 维度判断依据 + 利好利空风险 + 来源。"""
+    """单国研判详情：热度分 + 9 维度判断依据 + 利好利空风险 + 来源。"""
     try:
         data = get_country_detail(mr_id, country)
     except ValueError as e:

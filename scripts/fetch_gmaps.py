@@ -3,13 +3,27 @@
 """
 抓取 Google Maps 搜索结果，解析商家卡片，输出 CSV。
 
+v2（2026-09-12 WorkBuddy）：多查询批处理 + locale + 跨查询去重 + 断点续跑。
+  背景：Google Maps 单查询 feed 硬上限 ~120 条（实际稳定 50-100），波兰全国只跑
+  3 个大词只挖到 327 家——市调口径下认证安装商就有 1500+。突破靠「关键词矩阵」：
+  品类 × 客户类型 × 城市，一次跑几十上百个精准词，每词抓 50 条（合规上限）。
+
 用法:
-    python fetch_gmaps.py "battery storage distributor Hamburg" --max 50 --out leads.csv
+    # 单查询（向后兼容，等价旧版）
+    python fetch_gmaps.py "battery storage distributor Hamburg" --out leads.csv
+    # 多查询一次跑（同一浏览器实例，查询间随机延迟 5-9 秒）
+    python fetch_gmaps.py "hurtownik magazyn energii Warszawa" "instalator fotowoltaiki Kraków" --out pl.csv
+    # 从文件读关键词矩阵（每行一个），本地化界面+结果语言
+    python fetch_gmaps.py --queries-file kw_pl.txt --locale pl-PL --out pl_gmaps.csv
+    # 断点续跑（中断后重跑同命令加 --resume，已完成的查询自动跳过）
+    python fetch_gmaps.py --queries-file kw_pl.txt --resume --out pl_gmaps.csv
 
 依赖: playwright (pip install playwright && playwright install chromium)
 """
 import argparse
 import csv
+import json
+import os
 import random
 import re
 import sys
@@ -24,8 +38,9 @@ DEFAULT_PROXY = "http://127.0.0.1:33210"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
+# query 列 = 产出该条的搜索词（获客源效果分析用：哪个词/哪类词命中多）
 CSV_FIELDS = ["company_name", "rating", "phone", "website",
-              "google_maps_url", "raw_text"]
+              "google_maps_url", "raw_text", "query", "country"]
 
 
 def extract_real_url(href):
@@ -76,20 +91,21 @@ def parse_article(article):
     if m:
         phone = re.sub(r"\s+", " ", m.group(1)).strip()
 
-    # 官网：Website 链接是外链重定向（href 含 /url? 或 url?q=），语言无关
+    # 官网：两种形态（v2 教训：hl 本地化模式下是直链，不是 /url? 重定向）
+    #   a. /url?q=... 重定向（默认 en 界面）
+    #   b. 外部直链 http(s)（hl 本地化界面）——排除 Google 内部链接与广告跳转
     website = ""
     for wa in article.query_selector_all("a"):
         href = wa.get_attribute("href") or ""
+        if not href:
+            continue
         if "/url?" in href or "url?q=" in href:
             website = extract_real_url(href)
             break
-    # 兜底：按界面文本标签找（多语言）
-    if not website:
-        for wa in article.query_selector_all("a"):
-            lab = (wa.get_attribute("aria-label") or "") + " " + (wa.inner_text() or "")
-            if any(k in lab for k in ("Website", "网站", "網站", "ウェブ")):
-                website = extract_real_url(wa.get_attribute("href") or "")
-                break
+        if href.startswith("http") and "google.com" not in href \
+                and "/aclk?" not in href and "maps.google" not in href:
+            website = href
+            break
 
     return {
         "company_name": name,
@@ -101,63 +117,184 @@ def parse_article(article):
     }
 
 
+def _dedup_key(data):
+    """跨查询去重键：maps_url 优先，退而求公司名。"""
+    return data["google_maps_url"] or data["company_name"]
+
+
+def _load_queries(args):
+    """合并 --queries-file 与位置参数，去空去重保序。"""
+    queries = []
+    if args.queries_file:
+        with open(args.queries_file, encoding="utf-8-sig") as f:
+            for line in f:
+                q = line.strip()
+                if q and not q.startswith("#"):
+                    queries.append(q)
+    queries.extend(q.strip() for q in args.queries if q.strip())
+    seen = set()
+    out = []
+    for q in queries:
+        if q not in seen:
+            seen.add(q)
+            out.append(q)
+    return out
+
+
+def _ckpt_path(out):
+    return os.path.splitext(out)[0] + ".ckpt.json"
+
+
+def _load_checkpoint(args, n_queries):
+    """断点续跑：恢复已完成的查询集合与跨查询去重 seen。
+
+    ckpt 结构：{"done_queries": [...], "seen_keys": [...]}"""
+    if not args.resume:
+        return set(), set()
+    p = _ckpt_path(args.out)
+    if not os.path.exists(p):
+        return set(), set()
+    try:
+        with open(p, encoding="utf-8") as f:
+            ck = json.load(f)
+        done = {q for q in ck.get("done_queries", [])}
+        seen = set(ck.get("seen_keys", []))
+        print(f"[resume] 载入断点：已完成 {len(done)} 个查询，已见 {len(seen)} 条")
+        return done, seen
+    except Exception as e:
+        print(f"[resume] 断点文件损坏（{e}），从头跑")
+        return set(), set()
+
+
+def _save_checkpoint(out, done_queries, seen):
+    p = _ckpt_path(out)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump({"done_queries": sorted(done_queries),
+                   "seen_keys": sorted(seen)}, f, ensure_ascii=False)
+
+
+def _append_rows(out, rows):
+    """把本查询结果追加写入 CSV（无表头时先写表头；自动创建父目录）。"""
+    parent = os.path.dirname(os.path.abspath(out))
+    os.makedirs(parent, exist_ok=True)
+    exists = os.path.exists(out) and os.path.getsize(out) > 0
+    with open(out, "a", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
+        if not exists:
+            w.writeheader()
+        for r in rows:
+            w.writerow(r)
+
+
+def scrape_query(page, query, args, seen):
+    """跑单个查询：打开 Maps 搜索页 → 滚动加载 → 解析 → 返回本查询新命中。"""
+    url = ("https://www.google.com/maps/search/"
+           + urllib.parse.quote(query))
+    if args.hl:
+        url += "?hl=" + args.hl
+    page.goto(url, timeout=60000, wait_until="domcontentloaded")
+    time.sleep(random.uniform(5, 8))  # 等首屏渲染
+
+    feed = page.query_selector('[role="feed"]')
+    if not feed:
+        print(f"  [warn] 未找到结果 feed（可能是验证页/无结果）: {query}")
+        return []
+
+    fresh = []
+    prev_count = -1
+    stall = 0
+    while len(fresh) < args.max and stall < 4:
+        for a in page.query_selector_all('div[role="article"]'):
+            data = parse_article(a)
+            data["query"] = query
+            data["country"] = getattr(args, "country", "") or ""
+            key = _dedup_key(data)
+            if key and key not in seen:
+                seen.add(key)
+                fresh.append(data)
+                if len(fresh) >= args.max:
+                    break
+
+        if len(fresh) == prev_count:
+            stall += 1
+        else:
+            stall = 0
+        prev_count = len(fresh)
+
+        if len(fresh) >= args.max:
+            break
+        if feed:
+            feed.evaluate("el => el.scrollTop = el.scrollHeight")
+            time.sleep(random.uniform(2, 3))  # 限速，防反爬（合规：2-3 秒）
+        else:
+            break
+    return fresh
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    ap = argparse.ArgumentParser(description="抓取 Google Maps 搜索结果 -> CSV")
-    ap.add_argument("query", help="搜索词，如 'battery storage distributor Hamburg'")
-    ap.add_argument("--max", type=int, default=50, help="最多抓取条数 (默认 50)")
-    ap.add_argument("--out", default="leads.csv", help="输出 CSV 路径")
+    ap = argparse.ArgumentParser(description="抓取 Google Maps 搜索结果 -> CSV（v2 多查询批处理）")
+    ap.add_argument("queries", nargs="*", help="搜索词（可多个），如 'hurtownik magazyn energii Warszawa'")
+    ap.add_argument("--queries-file", default=None,
+                    help="关键词文件（每行一个，# 开头为注释），与位置参数可混用")
+    ap.add_argument("--max", type=int, default=50,
+                    help="每个查询最多抓取条数（默认 50，合规上限）")
+    ap.add_argument("--out", default="leads.csv", help="输出 CSV 路径（追加写）")
     ap.add_argument("--proxy", default=DEFAULT_PROXY, help="代理地址")
+    ap.add_argument("--locale", default="en-US",
+                    help="浏览器 locale（如 pl-PL/de-DE），影响界面与本地化结果排序")
+    ap.add_argument("--hl", default=None,
+                    help="Maps 界面语言参数（hl=pl/de/...），默认从 --locale 推导")
+    ap.add_argument("--country", default="",
+                    help="国家码（如 PL/DE），写入 CSV country 列供 merge 入库")
+    ap.add_argument("--resume", action="store_true",
+                    help="断点续跑：跳过 <out>.ckpt.json 里已完成的查询")
     args = ap.parse_args()
 
-    url = "https://www.google.com/maps/search/" + urllib.parse.quote(args.query)
+    queries = _load_queries(args)
+    if not queries:
+        ap.error("至少提供一个查询（位置参数或 --queries-file）")
+    if args.hl is None and "-" in args.locale:
+        args.hl = args.locale.split("-")[0]
 
-    leads = []
-    seen = set()
+    done, seen = _load_checkpoint(args, len(queries))
+    pending = [q for q in queries if q not in done]
+
+    print(f"共 {len(queries)} 个查询（断点已完成 {len(done)}，本次待跑 {len(pending)}）")
+    total_new = 0
+    per_query_stats = []
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, proxy={"server": args.proxy})
-        ctx = browser.new_context(user_agent=UA, locale="en-US",
+        ctx = browser.new_context(user_agent=UA, locale=args.locale,
                                   viewport={"width": 1440, "height": 900})
         page = ctx.new_page()
-        page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        time.sleep(random.uniform(5, 8))  # 等首屏渲染
 
-        feed = page.query_selector('[role="feed"]')
-        prev_count = -1
-        stall = 0
-        while len(leads) < args.max and stall < 4:
-            for a in page.query_selector_all('div[role="article"]'):
-                data = parse_article(a)
-                key = data["google_maps_url"] or data["company_name"]
-                if key and key not in seen:
-                    seen.add(key)
-                    leads.append(data)
-                    if len(leads) >= args.max:
-                        break
+        for i, query in enumerate(pending, 1):
+            print(f"[{i}/{len(pending)}] {query}")
+            try:
+                fresh = scrape_query(page, query, args, seen)
+            except Exception as e:
+                print(f"  [error] 查询失败（跳过继续）: {type(e).__name__}: {e}")
+                fresh = []
+            if fresh:
+                _append_rows(args.out, fresh)
+                done.add(query)
+                _save_checkpoint(args.out, done, seen)
+            total_new += len(fresh)
+            per_query_stats.append((query, len(fresh)))
+            print(f"  -> {len(fresh)} 条新命中（累计 {total_new}）")
 
-            if len(leads) == prev_count:
-                stall += 1
-            else:
-                stall = 0
-            prev_count = len(leads)
-
-            if len(leads) >= args.max:
-                break
-            if feed:
-                feed.evaluate("el => el.scrollTop = el.scrollHeight")
-                time.sleep(random.uniform(2, 3))  # 限速，防反爬
-            else:
-                break
+            # 合规：查询之间延迟，不并发
+            if i < len(pending):
+                time.sleep(random.uniform(5, 9))
 
         browser.close()
 
-    with open(args.out, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-        w.writeheader()
-        for lead in leads:
-            w.writerow(lead)
-
-    print(f"抓取完成: {len(leads)} 条 -> {args.out}")
+    print("\n===== 汇总 =====")
+    for q, n in per_query_stats:
+        print(f"  {n:>3}  {q}")
+    print(f"抓取完成: 本次新命中 {total_new} 条 -> {args.out}（断点文件 {_ckpt_path(args.out)}，--resume 可续跑）")
 
 
 if __name__ == "__main__":

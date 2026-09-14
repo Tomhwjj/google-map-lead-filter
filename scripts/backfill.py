@@ -10,6 +10,7 @@
 import argparse
 import csv
 import json
+import os
 import random
 import re
 import sys
@@ -22,16 +23,116 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
 # 常见联系方式页路径（按优先级，找到邮箱即停）
-CONTACT_PATHS = ["contact", "kontakt", "impressum", "about", "about-us",
+# 波兰市场实证：PL 公司邮箱常在 /kontakt /bok（客服）/ impressum 页；首页页脚为兜底
+CONTACT_PATHS = ["contact", "kontakt", "impressum", "bok", "about", "about-us",
                  "ueber-uns", "contact-us", "en/contact", "de/kontakt"]
 
 # 品牌/产品页路径（品牌未命中时抓，判断官网代理哪些品牌；含德语路径 marken/hersteller/produkte）
+# ⚠️ 仅作兜底：硬编码英文/德语路径对波兰语等 WooCommerce 站（如 /kategoria/.../falowniki/）全部 404，
+#   导致竞品品牌漏判（2026-09-11 Oze-Ekoshop 教训）。主路径改为「从首页自动提取产品分类链接」。
 BRAND_PATHS = ["brands", "products", "inverters", "battery-storage", "batteries",
                "manufacturers", "marken", "hersteller", "produkte"]
 
+# 多语言产品/品牌链接关键词（自动提取分类链接用，避免语言硬编码）
+LINK_PRODUCT_KW = [
+    "invert", "falownik", "inwerter", "hybryd", "hybrid",
+    "batter", "akumul", "magazyn", "storage",
+    "solar", "fotowoltaik", "photovoltaic", "panele", "panel",
+    "produkt", "product", "produkty", "sklep", "shop",
+    "brand", "marka", "marki", "producent", "manufactur", "hersteller", "herstell",
+]
+# 导航/杂项链接排除（避免抓到博客/政策/登录页浪费请求）
+LINK_EXCLUDE_KW = [
+    "blog", "kontakt", "contact", "about", "o-firmie", "o-nas", "polityka",
+    "regulamin", "cookie", "dostawa", "wysylka", "reklamacje", "zwroty",
+    "konto", "login", "koszyk", "cart", "checkout", "strefa", "promocje",
+    "okazje", "bestseller", "feed", "wp-json", "wp-content", "cdn-cgi",
+    ".css", ".js", ".png", ".jpg", ".svg", ".ico", "xmlrpc", "comments",
+]
+
+
+def extract_product_links(html, website):
+    """从首页 HTML 提取站内产品/品牌分类链接（多语言通用，替代硬编码英文路径）。"""
+    import urllib.parse as up
+    links = re.findall(r'href=["\']([^"\']+)["\']', html)
+    base = website.rstrip("/")
+    try:
+        base_domain = up.urlparse(website).netloc
+    except Exception:
+        return []
+    seen = set()
+    out = []
+    for l in links:
+        l = l.strip()
+        if not l or l.startswith(("mailto:", "tel:", "javascript:", "#")):
+            continue
+        if l.startswith("//"):
+            l = "https:" + l
+        elif l.startswith("/"):
+            l = base + l
+        try:
+            if up.urlparse(l).netloc != base_domain:
+                continue
+        except Exception:
+            continue
+        low = l.lower()
+        if any(k in low for k in LINK_EXCLUDE_KW):
+            continue
+        if any(k in low for k in LINK_PRODUCT_KW):
+            if l not in seen:
+                seen.add(l)
+                out.append(l)
+
+    # 逆变器/储能/电池页品牌最集中，排最前
+    def prio(u):
+        low = u.lower()
+        if any(k in low for k in ("invert", "falownik", "inwerter", "hybryd",
+                                  "hybrid", "magazyn", "storage", "batter", "akumul")):
+            return 0
+        return 1
+    out.sort(key=prio)
+    return out
+
+
+# 2026-09-12 WorkBuddy 加：邮箱格式过滤。scrape 常把资源文件/模板垃圾当邮箱抓回来
+# （如 pvgroup-logo@2x.png、2023-07-11T06-26-22.775Z@900X1200-...、john@home.com）。
+_EMAIL_JUNK_DOMAIN_PARTS = (
+    "example.com", "example.net", "example.org", "domain.com", "yourdomain",
+    "company.com", "home.com", "email.com", "test.com", "gtempaccount.com",
+    "wixpress", "sentry", "godaddy",
+)
+_EMAIL_JUNK_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",
+                    ".css", ".js", ".webmanifest", ".woff", ".ttf")
+
+
+def is_junk_email(e):
+    """判断单个邮箱是否为 scrape 垃圾（资源文件后缀/模板地址/时间戳串/长哈希）。"""
+    low = (e or "").strip().lower()
+    if "@" not in low:
+        return True
+    local, dom = low.rsplit("@", 1)
+    if any(x in dom for x in _EMAIL_JUNK_DOMAIN_PARTS):
+        return True
+    if dom.endswith(_EMAIL_JUNK_EXTS):
+        return True
+    if re.search(r"\d{4}-\d{2}-\d{2}", local):        # 时间戳串
+        return True
+    if re.fullmatch(r"[0-9a-f]{16,}", local):          # 长 hex 哈希
+        return True
+    if len(local) > 64:                                # 异常超长 local part
+        return True
+    return False
+
 
 def extract_emails(text):
-    return sorted(set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text)))
+    out = set()
+    for e in re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text):
+        # HTML 转义残留会把真邮箱粘脏（如 \u003e 渲染成文本 'u003e' 粘在 local part 前），
+        # 剥掉前缀后重新校验，'u003ekontakt@x.pl' -> 'kontakt@x.pl'
+        e2 = re.sub(r"^(u003[eE]|u003[cC]|%3e|%3c|&gt;|&lt;|>+|<+)", "", e)
+        if not is_junk_email(e2):
+            out.add(e2)
+    return sorted(out)
 
 
 def find_brands(text, brands):
@@ -71,6 +172,30 @@ def main():
             leads.append(row)
 
     results = []
+    # 断点续跑（2026-09-14 WorkBuddy 加）：out json 已存在时载入已完成记录，
+    # 按 website/公司名跳过；结果改为逐条落盘，中断后重跑同命令即续跑。
+    done_keys = set()
+    if os.path.exists(args.out):
+        try:
+            with open(args.out, encoding="utf-8") as f:
+                results = json.load(f)
+            done_keys = {
+                ((r.get("website") or "").strip().lower()
+                 or (r.get("company_name") or "").strip().lower())
+                for r in results
+            }
+            print(f"断点续跑：已有 {len(results)} 条，跳过已完成", flush=True)
+        except Exception as e:
+            print(f"[warn] 断点文件损坏，从头开始: {e}", flush=True)
+            results = []
+            done_keys = set()
+
+    def _save():
+        tmp = args.out + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(results, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, args.out)
+
     with sync_playwright() as p:
         launch_kwargs = {"headless": True}
         if args.proxy:
@@ -88,6 +213,11 @@ def main():
                 break
             name = lead.get("company_name", "").strip()
             website = (lead.get("website") or "").strip()
+            # 断点跳过：website 优先（空则退回公司名）
+            _key = (website or name).strip().lower()
+            if _key and _key in done_keys:
+                print(f"[{i + 1}/{len(leads)}] {name}: 已完成，跳过", flush=True)
+                continue
             # 继承原始字段（city/phone/rating/country/email/customer_type/address/
             # profile_url/source_url/google_maps_url/raw_text），绝不丢字段
             # （2026-09-05 教训：rec 只输出自己抓的字段，丢 source 字段导致入库 country 全空）
@@ -105,6 +235,7 @@ def main():
             })
             if website.startswith("http"):
                 texts = []
+                home_html = ""  # 首页原始 HTML，供品牌链接自动提取（不落库）
                 try:
                     page.goto(website, timeout=20000, wait_until="domcontentloaded")
                     try:
@@ -116,7 +247,8 @@ def main():
                     rec["meta"] = page.evaluate(
                         "() => document.querySelector('meta[name=\"description\"]')?.content || ''"
                     )
-                    rec["emails"] = extract_emails(page.content())
+                    home_html = page.content()
+                    rec["emails"] = extract_emails(home_html)
                     texts.append((page.inner_text("body") or "")[:5000])
                 except Exception as e:
                     rec["error"] = str(e)[:200]
@@ -149,11 +281,15 @@ def main():
                     return not rec["brands_found"]
 
                 if brands and should_keep_going():
-                    for path in brand_paths:
+                    # 品牌页来源：优先从首页自动提取产品分类链接（多语言通用，根治
+                    # 波兰语 WooCommerce 站漏判），提取不到回退硬编码英文/德语路径兜底。
+                    product_links = extract_product_links(home_html, website)
+                    brand_urls = product_links or [
+                        website.rstrip("/") + "/" + p for p in brand_paths]
+                    for url in brand_urls[:6]:  # 最多抓 6 个品牌页，控制耗时
                         if not should_keep_going():
                             break
                         try:
-                            url = website.rstrip("/") + "/" + path
                             page.goto(url, timeout=10000, wait_until="domcontentloaded")
                             try:
                                 page.wait_for_load_state("networkidle", timeout=4000)
@@ -170,13 +306,13 @@ def main():
                 rec["error"] = "no website"
 
             results.append(rec)
+            _save()  # 逐条落盘，断电/中断不丢
             print(f"[{i + 1}/{len(leads)}] {name}: {len(rec['emails'])} emails, "
                   f"brands={rec['brands_found']}", flush=True)
 
         browser.close()
 
-    with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=1)
+    _save()
     print(f"背调完成: {len(results)} 条 -> {args.out}")
 
 

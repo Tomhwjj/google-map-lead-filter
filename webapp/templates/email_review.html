@@ -2,7 +2,7 @@
 {% block title %}邮件审核{% endblock %}
 {% block content %}
 <h1>邮件审核队列</h1>
-<p class="hint">WorkBuddy 自动拉信分类后，低置信度（conf&lt;0.7）或建议换池的邮件落这里人工扫。<b>换池 / 标无效 100% 人工确认</b>：确认询价 → 换「已取得联系」；停业/自有品牌 → 换「黑名单」；误判/垃圾 → 忽略。</p>
+<p class="hint">WorkBuddy 自动拉信分类后，低置信度（conf&lt;0.7）或建议换池的邮件落这里人工扫。<b>换池 / 标无效 100% 人工确认</b>：确认询价 → 换「已取得联系」；停业/自有品牌 → 换「黑名单」；确认邮箱没用 → <b>⛔ 标无效</b>（自动放入<a href="{{ url_for('email_anomalies') }}">异常邮箱</a>，企业邮箱联系人同步失效，企业卡上会标 ⛔）；误判/垃圾 → 忽略。</p>
 
 {% if request.args.get('msg') %}
 <p class="hint" style="color:#16a34a;">{{ request.args.get('msg') }}</p>
@@ -26,6 +26,7 @@
     <th style="width:170px;">发件人</th>
     <th style="width:200px;">主题</th>
     <th style="width:300px;">正文摘要</th>
+    <th style="width:260px;">AI 分析</th>
     <th style="width:150px;">匹配企业</th>
     <th style="width:130px;">建议</th>
     <th style="width:80px;">状态</th>
@@ -37,11 +38,21 @@
       <td>
         <span style="color:{% if it.rule_id in ['R4','R5'] %}#b45309{% elif it.rule_id in ['R1','R2'] %}#2563eb{% else %}#6b7280{% endif %};font-weight:600;">[{{ it.rule_id }}] {{ it.label }}</span>
         <div class="hint" style="margin:2px 0 0;">conf {{ it.confidence }}</div>
+        {% if it.sub_label %}<div style="margin-top:3px;"><span style="display:inline-block;background:#eef2ff;color:#4338ca;border-radius:10px;padding:1px 8px;font-size:11px;">{{ it.sub_label }}</span></div>{% endif %}
       </td>
       <td>{{ it.mail_date_fmt or '—' }}</td>
       <td>{{ it.from_address or '' }}</td>
       <td>{{ it.subject or '' }}</td>
       <td><div title="{{ it.body_snippet or '' }}" style="white-space:pre-wrap;max-height:80px;overflow:hidden;font-size:12px;color:#555;">{{ (it.body_snippet or '')[:220] }}{% if (it.body_snippet or '')|length > 220 %}…{% endif %}</div></td>
+      <td>
+        {% if it.ai_analysis %}
+        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;font-size:12px;color:#78350f;white-space:pre-wrap;max-height:120px;overflow:auto;">🤖 {{ it.ai_analysis }}</div>
+        {% else %}
+        <span class="hint" style="color:#b45309;">待 LLM 补析</span>
+        {% endif %}
+        {% if it.matched_by %}<div class="hint" style="margin:3px 0 0;">匹配: {{ it.matched_by }}</div>{% endif %}
+        {% if it.bounced_recipient %}<div class="hint" style="margin:2px 0 0;color:#b91c1c;">退信: {{ it.bounced_recipient }}</div>{% endif %}
+      </td>
       <td>
         {% if it.matched_main_id %}
           <a href="{{ url_for('company_detail', main_id=it.matched_main_id) }}">{{ it.company_name or it.matched_main_id }}</a>
@@ -84,6 +95,13 @@
             <button class="muted">忽略(陌生邮箱)</button>
           </form>
           {% endif %}
+          <form method="post" action="{{ url_for('email_review_resolve', review_id=it.id) }}" class="inline" style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
+            <input type="hidden" name="action" value="invalid">
+            <input type="hidden" name="main_id" value="{{ it.matched_main_id or '' }}">
+            <input type="text" name="email" value="{{ it.bounced_recipient or it.matched_email or it.from_address or '' }}" placeholder="要标无效的邮箱" style="max-width:170px;font-size:12px;">
+            <input type="text" name="reason" placeholder="原因(可选)" style="max-width:90px;font-size:12px;">
+            <button class="danger" title="确认该邮箱没用：写入异常邮箱（email_anomalies），并把企业邮箱联系人标为失效">⛔ 标无效</button>
+          </form>
         {% else %}
           <span class="hint">已处理{{ ' · ' + it.reviewed_at_fmt if it.reviewed_at_fmt else '' }}</span>
         {% endif %}

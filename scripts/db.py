@@ -224,6 +224,8 @@ CREATE TABLE IF NOT EXISTS email_anomalies (
     reason       TEXT,          -- 分析原因（无邮箱=为什么没邮箱；无效邮箱=为什么无效）
     status       TEXT DEFAULT 'open',  -- open / resolved
     created_at   TEXT,
+    operator     TEXT,          -- 操作者（操作日志）：自动(bounce管线) / 人工(webui:xxx) 等
+    updated_at   TEXT,          -- 最后操作时间（重复标记/回填时刷新；created_at=首次标记时间）
     resolved_at  TEXT
 );
 
@@ -251,7 +253,11 @@ CREATE TABLE IF NOT EXISTS email_review (
     status           TEXT DEFAULT 'review',
     created_at       TEXT,
     reviewed_at      TEXT,
-    reviewer         TEXT
+    reviewer         TEXT,
+    ai_analysis      TEXT,
+    sub_label        TEXT,
+    bounced_recipient TEXT,
+    matched_by       TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_email_review_status ON email_review(status);
@@ -286,12 +292,24 @@ def init_db(db_path=None):
     ecols = [r[1] for r in conn.execute("PRAGMA table_info(email_anomalies)")]
     if "email" not in ecols:
         conn.execute("ALTER TABLE email_anomalies ADD COLUMN email TEXT")
+    # 老库迁移：email_anomalies 补操作日志列（operator=谁标的，updated_at=最后操作时间）
+    if "operator" not in ecols:
+        conn.execute("ALTER TABLE email_anomalies ADD COLUMN operator TEXT")
+    if "updated_at" not in ecols:
+        conn.execute("ALTER TABLE email_anomalies ADD COLUMN updated_at TEXT")
     # email 列索引须在 ALTER 之后建（老库 execute SCHEMA 时该列尚不存在）
     conn.execute("CREATE INDEX IF NOT EXISTS idx_email_anomalies_email ON email_anomalies(email)")
     # 老库迁移：gmail_contacts 补 skill_group 列（企业→skill 分组映射，保证同企业不拆组）
     gcols = [r[1] for r in conn.execute("PRAGMA table_info(gmail_contacts)")]
     if "skill_group" not in gcols:
         conn.execute("ALTER TABLE gmail_contacts ADD COLUMN skill_group TEXT")
+    # 老库迁移（spec v1.2.0）：email_review 补 4 列 —— ai_analysis(LLM 复核) /
+    # sub_label(子类型 out_of_office/ticket_ack/system_notification) /
+    # bounced_recipient(被弹回收件人) / matched_by(发件人匹配方式)
+    ercols = [r[1] for r in conn.execute("PRAGMA table_info(email_review)")]
+    for col in ("ai_analysis", "sub_label", "bounced_recipient", "matched_by"):
+        if col not in ercols:
+            conn.execute(f"ALTER TABLE email_review ADD COLUMN {col} TEXT")
     conn.commit()
     return conn
 

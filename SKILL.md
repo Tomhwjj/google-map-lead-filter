@@ -53,16 +53,16 @@ ENF 的 seller=经销商（脚本已映射 distributor）、installer=安装商�
 
 ### 第三步：Google Maps 批量抓取（全客户类型，批发商/安装商都搜）
 
-对「产品 + 客户类型 + 城市」关键词批量跑 `scripts/fetch_gmaps.py`，一次一个城市，**批发商词（wholesaler/grossiste）和安装商词（installer）都搜**，不分主次：
+对「产品 + 客户类型 + 城市」关键词批量跑 `scripts/fetch_gmaps.py`（v2 支持多查询批处理 + locale + 断点续跑），**批发商词（wholesaler/grossiste/hurtownik）和安装商词（installer）都搜**，不分主次：
 
 ```bash
-for city in Lyon Marseille Bordeaux Toulouse; do
-  python scripts/fetch_gmaps.py "grossiste stockage batterie $city" --max 40 --out "fr_${city}_wholesale.csv"
-  python scripts/fetch_gmaps.py "installateur batterie solaire $city" --max 40 --out "fr_${city}_installer.csv"
-done
+# v2 推荐：关键词文件一次批跑（品类 × 客户类型 × 城市 矩阵），本地化界面 + 断点续跑
+python scripts/fetch_gmaps.py --queries-file kw_pl.txt --locale pl-PL --out pl_gmaps.csv --resume
+# 兼容旧用法（单查询/多位置参数）
+python scripts/fetch_gmaps.py "hurtownik magazynów energii Warszawa" --max 50 --out pl_waw.csv
 ```
 
-脚本用 Playwright headless + 代理抓取，滚动加载，解析公司名/评分/电话/官网/Google Maps 链接，输出 CSV。**内置限速（2-3 秒延迟），勿改快。** ⚠️ Google Maps 不是"安装商专属"：搜批发商词命中的是「Solar energy equipment supplier」分类的批发商/设备供应商（2026-09 实测），批发商 + 安装商都是海量长尾，全都要铺。
+⚠️ **单查询 feed 硬上限 ~120 条**（实际稳定 50-100）——突破靠关键词矩阵拆查询（品类 4 词 × 角色 3 词 × Top 城市矩阵），不要指望一个大词抓全国。脚本内置限速（滚动 2-3 秒 + 查询间 5-9 秒），勿改快。v2 输出多一列 `query`（溯源：哪个词命中了谁，供「有效获客源」分析）。⚠️ Google Maps 不是"安装商专属"：搜批发商词命中的是「Solar energy equipment supplier」分类的批发商/设备供应商（2026-09 实测），批发商 + 安装商都是海量长尾，全都要铺。
 
 ### 第四步：合并去重
 
@@ -86,6 +86,9 @@ python scripts/merge_leads.py D:/tmp/fr_gmaps/ search.csv list.csv --out merged.
 python scripts/backfill.py leads.csv --out backfill.json \
   --brands "Deye,Sunsynk,Sol-Ark,INGE,Fusion,OHm,Noark,Huawei,Sungrow,GoodWe,Fronius,SMA,Solax,Sofar,Growatt,Kostal,SolarEdge,Enphase,Hoymiles,FoxESS,Solis"
 ```
+
+> ⚠️ **全量/快速规则（用户定，2026-09-12）**：正式跑一律**全量模式**（默认，含 contact/kontakt/impressum/bok 联系页——波兰公司习惯在 impressum/kontakt 页放邮箱，跳过会大量漏邮箱）；`--fast` **仅限测试**，且不得影响测试结论。跑正式任务时禁止加 `--fast`。
+> 网络分工：Maps 抓取（fetch_gmaps）必须走 VPN 代理（Google 屏蔽直连）；官网背调（backfill）**默认直连且禁系统代理**，不依赖梯子。
 
 2. 读 `backfill.json`，逐条判断：**品牌匹配（核心，`brands_found` 是否命中我方品牌）+ 上下文确认在销售而非仅提及**、渠道类型、公司规模、近期动态。优先读 body 判品牌/规模；官网抓不动用 **kitesurf** 兜底；品牌/规模证据缺失用 **anysearch（批量）/ WebSearch（零星）** 搜「公司名 + 品牌名 + distributor」或「公司名 + wholesale/warehouse/about」补证据（兜底分工见 `references/qualification-rules.md`）。
 3. 用 WebSearch 搜「公司名 + linkedin」补 LinkedIn 链接。
@@ -164,7 +167,7 @@ python scripts/serve_report.py report.html
 获客前先研判**国家市场热度**、定获客优先级（可选前置，独立成模块）：
 
 1. **新建市调任务**（`/research/new`）：填目标国家列表 + 执行人 + 缓存天数（默认 7）。
-2. **Agent 深度全网研判**：按 7 维度综合研判——最新政策（补贴/准入/关税）、市场装机增速、本土经销商活跃度、进口需求强度、贸易壁垒与限制政策、行业新闻情绪、竞品动态与供应链活跃度。
+2. **Agent 深度全网研判**：按 9 维度综合研判——最新政策（补贴/准入/关税）、市场装机增速、本土经销商活跃度、进口需求强度、贸易壁垒与限制政策、行业新闻情绪、竞品动态与供应链活跃度、**潜在客户总量**（TAM 测算：目录页数×条数 / 认证注册库数量 / 协会会员数，必须带依据）、**有效获客源**（实测有产量的渠道及证据，如「ENF 目录 12 页」「Maps 城市级矩阵可铺」）。
 3. **录入热度得分**（`/research/<mr_id>`）：每国 0-100 分 + 核心利好/利空摘要 + 风险点清单 + 来源快照。
 4. **导出市场洞察复盘报告.md**（`/research/<mr_id>/report.md`），作后续获客与国家优先级决策依据。
 

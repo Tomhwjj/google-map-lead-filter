@@ -71,7 +71,27 @@ def render_md(data):
         lines.append("（尚未录入任何国家的热度研判）")
     lines.append("")
 
-    lines.append("## 三、各国利好 / 利空摘要\n")
+    lines.append("## 三、各国潜在客户总量 + 有效获客源（v2 新增，量化 TAM 与渠道产量）\n")
+    lines.append("> 「潜在客户总量」= 该国可触达经销商/安装商数量上限（带来源测算）；"
+                 "「有效获客源」= 实测/强证据有产量的获客渠道。旧数据缺这两维显示 —。\n")
+    if scores:
+        lines.append("| 国家 | 潜在客户总量 | 有效获客源 |")
+        lines.append("|---|---|---|")
+        has_any = False
+        for s in scores:
+            d = s.get("dimensions") or {}
+            tam = d.get("潜在客户总量") or "—"
+            src = d.get("有效获客源") or "—"
+            if tam != "—" or src != "—":
+                has_any = True
+            lines.append(f"| {s['country']} | {tam} | {src} |")
+        if not has_any:
+            lines.append("\n（本批市调尚未录入这两个维度——建议重跑市调补齐）")
+    else:
+        lines.append("（尚未录入任何国家的热度研判）")
+    lines.append("")
+
+    lines.append("## 四、各国利好 / 利空摘要\n")
     if scores:
         for s in scores:
             lines.append(f"### {s['country']}（{s['score']} 分）\n")
@@ -81,7 +101,7 @@ def render_md(data):
         lines.append("（无）")
     lines.append("")
 
-    lines.append("## 四、风险点清单\n")
+    lines.append("## 五、风险点清单\n")
     risk_lines = []
     for s in scores:
         for r in _lines(s.get("risks")):
@@ -92,7 +112,7 @@ def render_md(data):
         lines.append("（未记录）")
     lines.append("")
 
-    lines.append("## 五、信息来源快照\n")
+    lines.append("## 六、信息来源快照\n")
     src_lines = []
     for s in scores:
         for src in _lines(s.get("sources")):
@@ -103,8 +123,17 @@ def render_md(data):
         lines.append("（未记录）")
     lines.append("")
 
-    lines.append("## 六、获客与国家优先级建议\n")
-    lines.append("> 待补充：按热度从高到低建议获客国家顺序、重点突破的国家/城市、风险规避提示。\n")
+    lines.append("## 七、获客与国家优先级建议\n")
+    if scores:
+        lines.append("> 按热度降序自动生成（TAM 取自「潜在客户总量」维度），最终决策仍需结合风险点。\n")
+        top = scores[:10]
+        for i, s in enumerate(top, 1):
+            d = s.get("dimensions") or {}
+            tam = d.get("潜在客户总量") or "—"
+            lines.append(f"{i}. **{s['country']}**（{s['score']} 分，潜在客户总量：{tam}）")
+        lines.append("")
+    else:
+        lines.append("（无研判数据，无法生成建议）\n")
 
     return "\n".join(lines)
 

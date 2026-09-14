@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}无效邮箱{% endblock %}
+{% block content %}
+<h1>邮箱异常 · ⛔ 无效邮箱</h1>
+
+<div style="margin:10px 0 14px;">
+  <a href="{{ url_for('email_anomalies_invalid') }}" class="btn primary">⛔ 无效邮箱（{{ n_open }} 生效中）</a>
+  <a href="{{ url_for('email_anomalies_no_email') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);">📭 无邮箱 · 待分析</a>
+</div>
+
+<p class="hint"><b>纯记录，无需处理</b>——退信/换箱由波次管线自动处理。<b>发送时间</b> = 你 Gmail 已发邮件里的真实记录（wb_sent_times_backfill 从 Gmail 补全）；「未发过」= Gmail 已发箱查不到该地址的发送记录。<b>退信时间</b> = 弹回邮件到达时间。</p>
+
+{% if request.args.get('msg') %}
+<p class="hint" style="color:#16a34a;">{{ request.args.get('msg') }}</p>
+{% endif %}
+
+<div class="row" style="gap:10px;">
+  <form method="get" action="{{ url_for('email_anomalies_invalid') }}" class="inline" style="display:flex;gap:8px;align-items:center;">
+    <input type="hidden" name="status" value="{{ status }}">
+    <label class="hint" style="margin:0;">skill 组
+      <select name="skill" onchange="this.form.submit()" style="margin-left:4px;">
+        <option value="">全部</option>
+        {% for s in skill_opts %}
+        <option value="{{ s }}" {{ 'selected' if s == skill_f }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="hint" style="margin:0;">发送时间
+      <select name="sent" onchange="this.form.submit()" style="margin-left:4px;">
+        <option value="">全部</option>
+        <option value="__none" {{ 'selected' if sent_f == '__none' }}>未发过</option>
+        {% for t in sent_opts %}
+        <option value="{{ t }}" {{ 'selected' if t == sent_f }}>{{ t }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <noscript><button class="muted">筛选</button></noscript>
+    {% if skill_f or sent_f %}
+    <a href="{{ url_for('email_anomalies_invalid', status=status) }}" class="hint" style="margin-left:2px;">✕ 清除筛选</a>
+    {% endif %}
+  </form>
+  <span style="align-self:center;">
+    <a href="{{ url_for('email_anomalies_invalid', status='', skill=skill_f, sent=sent_f) }}" class="btn" style="{{ 'opacity:.5;' if status != '' else '' }}">全部（{{ rows | length }}）</a>
+    <a href="{{ url_for('email_anomalies_invalid', status='open', skill=skill_f, sent=sent_f) }}" class="btn" style="background:#fff;color:#b91c1c!important;border:1px solid var(--border);{{ 'opacity:.5;' if status != 'open' }}">生效中</a>
+    <a href="{{ url_for('email_anomalies_invalid', status='resolved', skill=skill_f, sent=sent_f) }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);{{ 'opacity:.5;' if status != 'resolved' }}">已撤销</a>
+  </span>
+</div>
+
+{% if rows %}
+<table>
+  <thead><tr><th>邮箱</th><th>来源分组</th><th>企业</th><th>退信类型</th><th>退信时间</th><th>发送时间（真实）</th><th style="width:240px;">原因</th><th style="width:140px;">标记时间/操作者</th><th>状态</th></tr></thead>
+  <tbody>
+  {% for a in rows %}
+    <tr>
+      <td><code>{{ a.email }}</code></td>
+      <td>{% if a.skill_groups %}{% for g in a.skill_groups.split(',') if g.strip() %}<span style="display:inline-block;background:#eef2ff;color:#4338ca;border-radius:10px;padding:1px 8px;font-size:11px;margin:1px 2px 1px 0;">{{ g.strip() }}</span>{% endfor %}{% else %}—{% endif %}</td>
+      <td>{% if a.main_id %}<a href="{{ url_for('company_detail', main_id=a.main_id) }}">{{ a.company_name or a.main_id }}</a>{% else %}{{ a.company_name or '（陌生邮箱）' }}{% endif %}</td>
+      <td>{% if a.bounce_kind %}{{ a.bounce_kind }}{% else %}—{% endif %}</td>
+      <td>{{ a.bounce_fmt or '—' }}</td>
+      <td>{% if a.sent_fmt %}<div>{{ a.sent_fmt }}</div>{% if a.sent_subject %}<div class="hint" style="margin:2px 0 0;">{{ a.sent_subject[:36] }}</div>{% endif %}{% else %}<span class="hint">未发过</span>{% endif %}</td>
+      <td>{{ a.reason or '' }}</td>
+      <td>
+        {% if a.created_fmt %}<div>{{ a.created_fmt }}</div>{% else %}—{% endif %}
+        {% if a.operator %}<div class="hint" style="margin:2px 0 0;">{{ a.operator }}</div>{% endif %}
+      </td>
+      <td>{% if a.status == 'open' %}<span style="display:inline-block;background:#fef2f2;color:#b91c1c;border-radius:10px;padding:1px 8px;font-size:11px;">记录·生效中</span>{% else %}<span style="display:inline-block;background:#f0fdf4;color:#15803d;border-radius:10px;padding:1px 8px;font-size:11px;">记录·已撤销</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">当前筛选条件下没有记录。</p>
+{% endif %}
+{% endblock %}

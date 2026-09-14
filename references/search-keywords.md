@@ -41,14 +41,40 @@ Deye 是**储能逆变器 + 电池**玩家（户用储能逆变器全球第一�
 
 > 安装商是 Google Maps 长尾主力（一个城市几十家），头部批发商/进口商靠搜索 API 挖（见 `multi-source.md`）。
 
-## 本地语言关键词（欧洲重点市场，储能导向）
+## 本地语言关键词（欧盟 27 国 + 乌克兰全覆盖，储能导向）
 
-| 语言 | 储能批发商 | 储能安装商 |
-|------|-----------|-----------|
-| 德语 | `Speicher Großhändler` / `Batteriespeicher Großhandel` / `Hybridwechselrichter Distributor` | `Photovoltaik Speicher Installateur` / `Heimspeicher Installateur` |
-| 荷兰语 | `thuisbatterij groothandel` / `batterij opslag distributeur` | `thuisbatterij installateur` / `zonnepanelen batterij installateur` |
-| 法语 | `grossiste stockage batterie` / `distributeur onduleur hybride` | `installateur batterie solaire` / `installateur onduleur hybride` |
-| 西语 | `mayorista almacenamiento batería` / `distribuidor inversor híbrido` | `instalador batería solar` / `instalador inversor híbrido` |
+> v2（2026-09-12）：从 4 语言扩到全市场覆盖——此前缺波兰语等小语种列，跑 PL 只能临时凑 3 个窄词，
+> 是波兰只挖到 327 家（实际千级）的根因之一。**可执行版本在 `runner.py` 的 `COUNTRY_KEYWORDS`**
+> （获客流水线直接消费），本表是同源的规则文档；两处改动须同步。
+> 词形组合 = 品类（储能/电池/混合逆变器）× 角色（批发/经销/安装）。
+
+| 语言 (locale) | 覆盖国家 | 储能批发商词 | 储能经销商/安装商词 |
+|------|------|-----------|-----------|
+| 德语 (de-DE) | DE、AT | `Speicher Großhändler` / `Batteriespeicher Großhandel` | `Hybridwechselrichter Distributor` / `Photovoltaik Speicher Installateur` |
+| 法语 (fr-FR) | FR、LU | `grossiste stockage batterie` / `distributeur onduleur hybride` | `installateur batterie solaire` |
+| 荷兰语 (nl-NL) | NL、BE | `thuisbatterij groothandel` / `batterij opslag distributeur` | `thuisbatterij installateur` |
+| 西语 (es-ES) | ES | `mayorista almacenamiento batería` / `distribuidor inversor híbrido` | `instalador batería solar` |
+| **波兰语 (pl-PL)** | PL | `hurtownik magazynów energii` / `dystrybutor magazynu energii` | `instalator magazynów energii` / `fotowoltaika hurtownia` |
+| 意语 (it-IT) | IT | `grossista sistemi di accumulo` / `distributore inverter ibrido` | `installatore batteria solare` |
+| 葡语 (pt-PT) | PT | `grossista armazenamento bateria` | `distribuidor inversor híbrido` / `instalador bateria solar` |
+| 瑞典语 (sv-SE) | SE | `batterilager grossist` | `solcellsbatteri distributör` / `solcellsinstallatör` |
+| 丹麦语 (da-DK) | DK | `batterilager grossist` | `solcellebatteri distributør` / `solcelleinstallatør` |
+| 芬兰语 (fi-FI) | FI | `energiavarasto tukku` | `hybridivaihtosuuntaaja jälleenmyyjä` / `aurinkopaneeli akku asentaja` |
+| 英语 (en) | IE、MT | `battery storage wholesaler` | `hybrid inverter distributor` / `solar battery installer` |
+| 捷克语 (cs-CZ) | CZ | `velkoobchod bateriová úložiště` | `distributor hybridních střídačů` / `instalace fotovoltaiky s baterií` |
+| 匈牙利语 (hu-HU) | HU | `energiatároló nagykereskedő` | `hibrid inverter forgalmazó` / `napelem akkumulátor telepítő` |
+| 罗马尼亚语 (ro-RO) | RO | `angrosist sisteme de stocare` | `distribuitor invertor hibrid` / `instalator panouri solare baterii` |
+| 斯洛伐克语 (sk-SK) | SK | `veľkoobchod batériové úložiská` | `distributor hybridných meničov` / `inštalácia fotovoltaiky s batériou` |
+| 斯洛文尼亚语 (sl-SI) | SI | `trgovina na veliko baterijska skladišča` | `distributer hibridnih pretvornikov` / `namestitev fotovoltaike z baterijo` |
+| 克罗地亚语 (hr-HR) | HR | `veleprodaja baterijskih sustava` | `distributer hibridnih invertera` / `instalater solarnih sustava` |
+| 希腊语 (el-GR) | GR、CY | `χονδρικό εμπόριο συστημάτων αποθήκευσης` | `διανομέας υβριδικών αντιστροφέων` / `εγκαταστάτης φωτοβολταϊκών` |
+| 保加利亚语 (bg-BG) | BG | `едро на акумулаторни системи` | `дистрибутор на хибридни инвертори` / `монтажник на соларни батерии` |
+| 立陶宛语 (lt-LT) | LT | `didmeninė prekyba energijos kaupikliais` | `platintojas hibridiniai keitikliai` / `montuotojas saulės baterijų` |
+| 拉脱维亚语 (lv-LV) | LV | `vairumtirdzniecība enerģijas uzglabāšana` | `izplatītājs hibrīdie invertori` / `uzstādītājs saules bateriju` |
+| 爱沙尼亚语 (et-EE) | EE | `hulgimüük akudesüsteemid` | `edasimüüja hübriidinverterid` / `paigaldaja päikesepaneelide akud` |
+| 乌克兰语 (uk-UA) | UA | `оптовий продавець накопичувачів енергії` | `дистриб'ютор гібридних інверторів` / `монтажник сонячних станцій` |
+
+> 旧表（仅德/荷/法/西）见 git 历史。新增语言翻译系模型生成，**主要市场（PL/IT/RO/CZ/GR/UA）背调时建议人工抽查校准一次**；小市场（MT/CY/LU/IE）英语覆盖度高，本地语可缓。
 
 ## 生成策略
 

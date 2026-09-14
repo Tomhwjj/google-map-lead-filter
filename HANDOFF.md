@@ -12,12 +12,39 @@
 - [x] ~~传竞品品牌重跑 backfill~~：三组品牌 + `--deye`（品牌页抓到我方才停）+ `--no-proxy-server`（直连不读系统代理）重跑 50 家成功——4 家卖 Deye 恢复、9 家竞品命中；7 家光伏批发商 brands 空但 body 明确光伏品类 → product_tier 手工判 competitor（增量 24）落地 score_leads.py
 - [x] ~~**客户池模块**（第二阶段）~~：五分类操作 UI（`/pool` 总览 + 企业详情 + 行内换池）+ `pool_log` 轨迹时间戳，已落地并验证
 - [x] ~~**市调模块**（第三阶段）~~：热度 0-100 研判录入 + 市场洞察复盘报告 + 缓存 7 天过期，已落地并验证
+- [x] ~~**重跑 282 家 brands_found 空候选**~~：dry-run 15 家验证修复有效（Greto/Grodno/TIM 3 家命中 Deye 卖家，之前全漏判）但 10 家 timeout（反爬/慢站）→ **用户决定不跑全量，改按需单家修**
+- [ ] **WorkBuddy 侧 1a/1b/1c 落地**：`email_pipeline_wb.py` 改 `RE_TICKET` 扩展（扫 subject + 多语言工单措辞 + zendesk/freshdesk 发件识别）+ `_hit_r5` 兜底 no_action + `sub_label` 子类型写入（out_of_office/ticket_ack/system_notification），改完 dry-run 冒烟；改时 19:00（提案 0）
 - [ ] **三模块联调 + 真实数据全流程**：市调定国家 → 获客入库 → 客户池跟进，用真实数据端到端跑一遍
 - [ ] **Volt Polska 换池到黑名单**：已定性同行生产商（task_issues #12），需人工在 UI 换池（潜在客户(未联系) → 黑名单客户，备注「同行/自有品牌生产商」）。skill3 组里它的 3 个邮箱是否一并处理待定
 - [ ] **own_brand 自动检测（根治方案，提疑不定性，暂缓）**：让脚本拦住漏判但不误杀。① `backfill.py` 对 `brands_found` 空的公司，额外提取**生产商措辞**信号（producent / produkujemy / produkcja / manufacturer / we produce / hersteller / produktion，**绝不用**产品词 inwerter/magazyn/falownik——渠道也写），存字段 `own_brand_signal`；② `score_leads.py` 命中信号 → 输出 `own_brand_suspect=true`，**只在评分依据提示「疑似同行生产商需人工复核」，不自动降级/不改渠道分/不归黑名单**；③ 定性永远靠 Claude 读 body：producent=同行杀 / hurtownia=dystrybucja=渠道留。⚠️ 动机：brands_found 空≠own_brand（德国批发商品牌列表 JS/图片抓不到但真卖竞品，见 qualification-rules.md「品牌名抓不到≠不卖竞品」那条），硬判必误杀，故只提疑不定性。
 
 ## 改动记录（按日倒序）
 
+- **2026-09-14（Claude Code 把关复核 + 全量 commit）**：
+  - **把关**：逐项复核 WorkBuddy 09-12→09-14 全部改动（db.py/spec.json/core.py/backfill.py/email_pipeline_wb.py/runner.py/merge_leads.py/render_research_report.py/webapp/app.py + 8 个新增脚本）。结论：质量高、未破换池铁律、无越权 ALTER/DROP、无裸 SQL 注入。
+  - **修 2 处真问题**：① spec.json `email_anomalies` 写边界补 `operator`/`updated_at`（WorkBuddy 加列后未同步契约）；② `record_email_review` 的 ON CONFLICT 无条件覆盖 `ai_analysis`，管线每日重跑会把 `update_email_review_analysis` 写好的 LLM 复核抹掉 → 改 `COALESCE(NULLIF(excluded.ai_analysis,''), email_review.ai_analysis)`，冒烟验证重跑后 LLM 结果保留。
+  - **开放问题裁决**（详见 `对接-workbuddy.md` 留言）：anna.kowalska@mail.com 同意标无效（双占位信号）；DE 两僵尸任务待我单独清（tasks 表归 Claude）；is_syncable_email 整词方向无异议。
+  - **commit**：全量提交本轮改动（含 runner.py `--fast` 硬编码移除防复发、backfill 断点续跑、email 异常页拆两子页、Gmaps 矩阵方法论文档等）。data/ 产物不入 git。
+
+- **2026-09-12 晚（WorkBuddy 侧·UI 审核闭环 + 操作日志，含 email_anomalies 加 2 列）**：
+  - **审核页「⛔ 标无效」按钮**（`/email-review`）：邮箱预填可改 + 原因可选 → `mark_email_invalid` + `mark_contact_invalid` + `resolve_email_review(applied)` 链式落库；人工确认入口补齐（此前仅 bounce conf≥0.95 自动标）。
+  - **email_anomalies 加 2 列 `operator`/`updated_at`**（db.py SCHEMA + init_db ALTER 迁移，additive 向后兼容）：created_at=首次标记时间不覆盖，updated_at/operator=最后操作；`mark_email_invalid` 加可选 `operator` 参数（管线传 `自动(bounce管线)`、webui 传 `人工(xxx)`），`scan_no_email_anomalies` 落 `自动(无邮箱扫描)`。新脚本 `scripts/backfill_anomaly_operator.py` 回填历史 13 条（#181-#193）。
+  - **异常邮箱页**加「skill 分组」列（gmail_contacts.skill_group 聚合）+「标记时间/操作者」列；**企业卡**无效邮箱红底删除线+⛔+计数徽章（`list_companies` 附加 invalid_emails）；企业详情 skill 分组对 invalid 联系人也显示。
+  - **统一操作日志**：新 core 读函数 `list_operation_log`（聚合 pool_log / email_review / email_anomalies / diffs 四来源）；webapp 新路由 `/operations` + 仪表盘「最近操作」区块 + 导航入口；style.css 加 button.danger。
+  - 验证：副本库冒烟（迁移/幂等语义）+ Flask test client 全页断言 + 聚合核对全过；webapp 已重启。改动已备案至 `对接-workbuddy.md` 留言区（含请 Claude 复核 spec 列定义事项）。
+
+- **2026-09-12（WorkBuddy 五项改进计划审核 + schema/core v1.2.0）**：
+  - **审核裁决**：WorkBuddy 2026-09-11 晚提的五项改进计划逐条裁决（详见 `对接-workbuddy.md`）——提案0 改时 19:00 同意；提案1 修机器人回执误判 R5 同意（真 bug：`_hit_r5` 0.55 兜底也建议换池）；提案2 ai_analysis 列同意；提案3 选 A（维持 7 类 + `sub_label` 子类型）、转发失败回执不标无效、R4 只改 UI 文案；提案4 补发送前排除集合。
+  - **schema v1.2.0**：`email_review` 加 4 列 `ai_analysis`/`sub_label`/`bounced_recipient`/`matched_by`（db.py SCHEMA + init_db 老库迁移，现有 leads.db 已 ALTER，备份 `leads.db.bak_20260912_schema_v120`）。
+  - **core 补 3**：`record_email_review` 扩 4 个可选参数并真写入（`**kwargs` 不再丢弃）、新增 `update_email_review_analysis`、新增 `get_send_exclude_set`（email_anomalies open ∪ gmail_contacts invalid，实测 13 个无效邮箱）。验证 4 列迁移 + 写入回读通过。
+  - **重跑 282 家暂停**：dry-run 15 家验证 backfill 修复有效（Greto/Grodno/TIM 3 家命中 Deye 卖家，之前全漏判），但 10 家 `Page.goto Timeout`（反爬/慢站）。用户决定不跑全量，改按需单家修。
+
+- **2026-09-11（backfill 品牌页路径盲区 + Oze-Ekoshop 漏判修正，task_issues #13）**：
+  - **发现**：用户问 Oze-Ekoshop 为何产品匹配 0 分。背调查实：官网 oze-ekoshop.pl 首页无品牌名，品牌在波兰语分类页 `/kategoria/.../falowniki/`（逆变器，实卖 Sofar×17/SolarEdge×3/Felicity×2，均竞品）；而 `backfill.py` 的 `BRAND_PATHS` 硬编码英文/德语（brands/products/inverters/...），波兰语 WooCommerce 站全 404 → 竞品品牌漏判 → 产品匹配误判 0。
+  - **修复 backfill.py**：品牌页改为「从首页自动提取产品分类链接」（新增 `extract_product_links`，多语言关键词 falownik/inwerter/magazyn/produkty/producent… + 排除导航噪音），提取不到回退硬编码路径兜底；最多抓 6 个品牌页。
+  - **Oze-Ekoshop 修正**：brands_found 补 `[Sofar,SolarEdge,Felicity]`，重算 62B→86A（产品匹配 0→24「卖竞品·增量」，长尾 70→94A）；sells_deye 仍 0（不卖 Deye）。
+  - **获客记录**：task_issues #13（数据质量，open）——影响面 282 家（PL 155 distributor/122 installer + DE 46）brands_found 空候选，待重跑确认。
+  - **新增 scripts/rerun_brands.py**：重跑候选脚本（复用 backfill 提取 + score_leads 重算），`--country/--channel/--min-score/--limit/--dry-run`。
 - **2026-09-10（WorkBuddy 侧·首跑）**：**真实写入首跑完成**（跑前备份 `leads.db.bak_20260910_wb_firstrun`）。email_review 18 行（applied 8 / review 7 / ignored 3）；bounce 库外动作 5 封（email_anomalies #182-185 新增 + #181 幂等复用 przetargi@；gmail_contacts 置 invalid 3 行，标无效对象=被弹回收件人而非 mailer-daemon）；spec v1.1.0 域后缀反查生效（PIVIT michal.sarnecki@ → LDPL-304de4192e）。review 队列 7 条待人工/Claude 扫（R5×4 建议已取得联系、R4×2 建议核后黑名单、R6×1 陌生个人）。剩：用户 OAuth readonly 授权 → fetch 模块 → 09:00 自动化。
 
 - **2026-09-10（WorkBuddy 侧，邮件回复分类管线）**：`scripts/email_pipeline_wb.py` 落地（WorkBuddy 拥有），读 spec.json 规则做 R1→R7 瀑布分类 + 发件人匹配（只走 core 函数零裸 SQL）+ 写入端（record_email_review/mark_email_invalid/mark_contact_invalid，缺函数自动降级 dry-run）。真实样本 `data/email_samples/` 16/16 回归通过，修复 Claude 提的 3 个质量问题：①Volt Polska own_brand → R4（own_brand 句式 + R5 前 R4 让位）；②Menlo 停业 → R4（RE_R4_STRONG 压过 R2 自动回复）；③KSTAR 工单关闭 → R7（RE_TICKET_CLOSED 终态 vs TIM 自动 ack 区分）。裁决(ii)落地（R3/R7 conf≥0.5 允许 ignored）。自研 2 条待复核：bounce 收件人提取（标无效对象=被弹回地址，非 mailer-daemon）、自发邮件拦截（from=hsh@wccsolar.es → ignored）。⚠ 样本 Deye_...__1a07c79adeaf 疑似导错（是群发原件非 bounce），已请 Claude 复核；match_logic 域名后缀反查建议待拍板。进展详见 `对接-workbuddy.md`。

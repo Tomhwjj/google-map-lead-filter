@@ -115,11 +115,33 @@ RE_R4_BODY = re.compile(
     re.I)
 
 # 客服工单语（KSTAR 教训）：[#1023] / request closed / support team → 非经销商线索，归 R7
+# v1.2.0 提案1a（Claude 已批）扩展（Yuma 教训）：德语 Zendesk 回执无 # 号、措辞全德语，
+# 旧模式漏网 → 补多语言工单/自动回执措辞；让位检查同时扫 subject（工单号常在主题里）
 RE_TICKET = re.compile(
     r"\[?#\d+\]?|ticket( id| number)?[:#]?\s*\d+|"
     r"(your|our) (request|ticket|case) (has|was|is) (been )?(received|closed|resolved)|"
-    r"support (team|center|ticket)|service desk|customer service|automated message from",
+    r"support (team|center|ticket)|service desk|customer service|automated message from|"
+    # 德语工单/自动回执（Yuma Zendesk 教训："Ihr Ticket ist eingegangen" / "Anfrage (348108) wird bearbeitet"）
+    r"ist (bei uns )?eingegangen|wird bearbeitet|liegt in unserer bearbeitung|"
+    r"ihr(e[s]?m?)? (ticket|anfrage|anliegen)|anfrage\s?\(\d+\)|"
+    r"automatische (antwort|best[äa]tigung)|dies ist (eine )?automatisch|"
+    # 法语/意语自动回执
+    r"accus[ée] de r[ée]ception|r[ée]ponse automatique|risposta automatica|messaggio automatico",
     re.I)
+
+# 工单系统发件指纹（v1.2.0 提案1a）：Zendesk 等经客户域名代发，from 是 support@客户域，
+# 但 Message-ID / References 会带系统域指纹（Yuma 教训：from=support@yuma.de，
+# Message-ID=<..._sprut@zendesk.com>）
+RE_TICKET_SYSTEM = re.compile(
+    r"@(zendesk|freshdesk|freshservice|intercom|helpdesk|desk-mail|groovehq)\.", re.I)
+
+
+def _ticket_system_sender(msg):
+    for v in (msg.get("from") or "", msg.get("message_id") or "",
+              msg.get("references") or ""):
+        if RE_TICKET_SYSTEM.search(v or ""):
+            return True
+    return False
 
 RE_R5_BODY = re.compile(
     r"price|quotation|quote|catalog|catalogue|moq|minimum order|"
@@ -159,6 +181,10 @@ def _hit_r2(msg):
     # 工单终态压过自动 ack（KSTAR 教训：ticket closed ≠ 待回复的自动确认）
     if RE_TICKET_CLOSED.search(body) or RE_TICKET_CLOSED.search(subj):
         return False, 0.0, ""   # 让位给 R7
+    # v1.2.0 提案1a：工单语让位 R7——只扫 subject（TIM 教训：正文工单式措辞会误伤
+    # 真自动确认；主题含工单号/工单措辞才是强信号）
+    if RE_TICKET.search(subj):
+        return False, 0.0, ""
     if RE_R2_SUBJECT.search(subj):
         return True, 0.92, "subject 命中自动回复标题模式"
     m = RE_R2_BODY.search(body)
@@ -206,7 +232,8 @@ def _hit_r5(msg):
     if m:
         return True, 0.75, f"in_reply_to 有值 + body 命中询价/合作措辞: {m.group(0)!r}"
     # 客服工单语 ≠ 询价（KSTAR 教训）：无询价关键词且有工单措辞 → 让位给 R7
-    if RE_TICKET.search(body):
+    # v1.2.0 提案1a：让位检查加扫 subject（Yuma 教训：工单号在主题里）
+    if RE_TICKET.search(body) or RE_TICKET.search(msg.get("subject") or ""):
         return False, 0.0, ""
     # 有 in_reply_to 但无关键词：仍是真人回复，低置信进 review 人工看
     return True, 0.55, "in_reply_to 有值（真人回复）但未命中询价关键词"
@@ -226,6 +253,9 @@ def _hit_r6(msg):
 
 def _hit_r7(msg):
     """R7 兜底，但客服工单语单独识别（置信度更高，裁决(ii)下可 ignored）。"""
+    # v1.2.0 提案1a：工单系统发件（zendesk 类系统域指纹）直接归 R7，高置信
+    if _ticket_system_sender(msg):
+        return True, 0.85, "工单系统发件（Message-ID/References 带系统域指纹），非经销商线索"
     m = RE_TICKET.search(msg.get("body") or "") or RE_TICKET.search(msg.get("subject") or "")
     if m:
         return True, 0.65, f"客服工单/系统通知措辞: {m.group(0)!r}（非经销商线索）"
@@ -271,7 +301,27 @@ def classify(msg):
             return _result(msg, rid, rule, conf, basis)
     return _result(msg, "R7", rules[-1], 0.50, "兜底：R1–R6 均未命中")
 
+def _r2_sublabel(msg):
+    """v1.2.0 提案3（Claude 裁决）：R2 子类型 out_of_office / ticket_ack / system_notification，
+    写 email_review.sub_label 供筛选统计。"""
+    if _ticket_system_sender(msg):
+        return "system_notification"
+    text = (msg.get("subject") or "") + " " + (msg.get("body") or "")
+    if re.search(r"out of office|on vacation|annual leave|away from (the office|my desk)|"
+                 r"urlopie|im urlaub|de vacaciones|jsem na dovolen|wakacj", text, re.I):
+        return "out_of_office"
+    if RE_TICKET.search(msg.get("subject") or "") or RE_TICKET.search(msg.get("body") or ""):
+        return "ticket_ack"
+    return "system_notification"
+
 def _result(msg, rid, rule, conf, basis):
+    # spec 的 action 形如 "mark_invalid：写 email_review(...)"，冒号有全角/半角两种
+    action = re.split(r"[:：]", rule["action"])[0].strip()
+    # v1.2.0 提案1b（Claude 已批）：R5 兜底（in_reply_to 有值但未命中询价关键词，conf 0.55）
+    # 绝不建议换池——只有命中询价/合作关键词（conf≥0.75）才保留 transfer_review；
+    # 兜底命中降为 no_action，仍 status=review 供人工看（Yuma Zendesk 误判教训）
+    if rid == "R5" and conf < 0.7:
+        action = "no_action"
     return {
         "message_id": msg.get("message_id") or "",
         "from_address": (msg.get("from") or "").strip().lower(),
@@ -284,8 +334,8 @@ def _result(msg, rid, rule, conf, basis):
         "classification": rule["label"],
         "confidence": round(conf, 2),
         "rule_id": rid,
-        # spec 的 action 形如 "mark_invalid：写 email_review(...)"，冒号有全角/半角两种
-        "proposed_action": re.split(r"[:：]", rule["action"])[0].strip(),
+        "sub_label": _r2_sublabel(msg) if rid == "R2" else "",
+        "proposed_action": action,
         "action_detail": basis,
     }
 
@@ -378,7 +428,8 @@ def execute_actions(res, db_path, self_addr=""):
         return out
     reason = f"bounce (rule {res['rule_id']}, conf {res['confidence']}): {res['action_detail'][:200]}"
     aid = core.mark_email_invalid(target, reason=reason,
-                                  main_id=res.get("matched_main_id"), db_path=db_path)
+                                  main_id=res.get("matched_main_id"),
+                                  operator="自动(bounce管线)", db_path=db_path)
     out.append(f"email_anomalies#{aid} 已记无效邮箱: {target}")
     if hasattr(core, "mark_contact_invalid"):   # Claude 补函数后自动启用
         r = core.mark_contact_invalid(target, error=reason, db_path=db_path)

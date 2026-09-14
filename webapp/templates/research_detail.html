@@ -63,9 +63,9 @@
   </select>
   <label>热度得分（0–100）</label>
   <input type="number" name="score" min="0" max="100" value="50" required>
-  <label>7 维度判断依据（每维一句话，作为「详细研判」的判断依据）</label>
+  <label>{{ dims | length }} 维度判断依据（每维一句话，作为「详细研判」的判断依据）</label>
   {% for d in dims %}
-  <input type="text" name="dim_{{ d }}" placeholder="{{ d }}：例：…">
+  <input type="text" name="dim_{{ d }}" placeholder="{{ d }}：{% if d == '潜在客户总量' %}例：约 1500 家（依据：UDT 认证安装商 + ENF 目录 12 页×100）{% elif d == '有效获客源' %}例：ENF installer 目录 12 页（实测）；Maps 城市级矩阵 20 城可铺{% else %}例：…{% endif %}">
   {% endfor %}
   <label>核心利好摘要（政策/装机增速/需求强度…）</label>
   <textarea name="positives" rows="2" placeholder="例：储能补贴延续，户储装机同比 +30%"></textarea>

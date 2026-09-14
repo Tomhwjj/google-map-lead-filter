@@ -12,11 +12,13 @@
     <span class="brand">🔌 光伏获客系统</span>
     <a href="{{ url_for('index') }}" class="{{ 'active' if request.endpoint == 'index' }}">仪表盘</a>
     <a href="{{ url_for('research') }}" class="{{ 'active' if request.endpoint == 'research' }}">市调</a>
+    <a href="{{ url_for('country_progress') }}" class="{{ 'active' if request.endpoint == 'country_progress' }}">开发进度</a>
     <a href="{{ url_for('diffs') }}" class="{{ 'active' if request.endpoint == 'diffs' }}">差异审核</a>
     <a href="{{ url_for('pool') }}" class="{{ 'active' if request.endpoint == 'pool' }}">客户池</a>
     <a href="{{ url_for('companies') }}" class="{{ 'active' if request.endpoint == 'companies' }}">企业库</a>
-    <a href="{{ url_for('email_anomalies') }}" class="{{ 'active' if request.endpoint == 'email_anomalies' }}">邮箱异常</a>
+    <a href="{{ url_for('email_anomalies') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('email_anomalies') }}">邮箱异常</a>
     <a href="{{ url_for('email_review_list') }}" class="{{ 'active' if request.endpoint == 'email_review_list' }}">邮件审核</a>
+    <a href="{{ url_for('operations') }}" class="{{ 'active' if request.endpoint == 'operations' }}">操作日志</a>
   </nav>
   <main class="main">
     {% block content %}{% endblock %}

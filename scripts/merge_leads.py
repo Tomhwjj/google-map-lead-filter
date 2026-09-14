@@ -33,7 +33,8 @@ from urllib.parse import urlparse
 # 每种来源缺的字段留空，绝不丢字段（2026-09-05 教训：字段丢失导致入库 country 全空）
 OUT_FIELDS = ["company_name", "country", "city", "customer_type",
               "phone", "email", "website", "address", "profile_url",
-              "source_url", "rating", "google_maps_url", "raw_text"]
+              "source_url", "rating", "google_maps_url", "raw_text",
+              "query"]  # v2: fetch_gmaps 溯源列（哪个搜索词命中，供有效获客源分析）
 
 # 免费/公共邮箱域：邮箱后缀做「同公司」识别时排除，避免两家不同公司共用 gmail 误判
 FREE_EMAIL_DOMAINS = {
@@ -94,6 +95,7 @@ def _make_rec(r, file_city):
         "rating": (r.get("rating") or "").strip(),
         "google_maps_url": (r.get("google_maps_url") or "").strip(),
         "raw_text": (r.get("raw_text") or "").strip(),
+        "query": (r.get("query") or "").strip(),  # v2 溯源列：多查询命中来源词
     }
 
 
@@ -147,6 +149,9 @@ def main():
 
     for fp in files:
         file_city = os.path.splitext(os.path.basename(fp))[0]
+        # 泛名文件（非按城市命名的单源批处理输出）不作为 city 兜底，避免 city='gmaps' 这类脏值
+        if file_city.lower() in {"gmaps", "search", "enf", "merged", "test", "leads"}:
+            file_city = ""
         with open(fp, encoding="utf-8-sig") as f:
             rows = list(csv.DictReader(f))
         for r in rows:

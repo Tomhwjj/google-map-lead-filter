@@ -86,6 +86,8 @@ button {
 button.primary { background: var(--green); border-color: var(--green); color: #fff; }
 button.ok { background: var(--green); border-color: var(--green); color: #fff; }
 button.muted { color: var(--gray); }
+button.danger { background: #b91c1c; border-color: #b91c1c; color: #fff; font-weight: 600; }
+button.danger:hover { background: #991b1b; }
 
 /* 差异待核验：pending 行高亮，突出待处理 */
 tr.pending { background: #fffbeb; }

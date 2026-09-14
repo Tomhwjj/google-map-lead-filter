@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}无邮箱企业{% endblock %}
+{% block content %}
+<h1>邮箱异常 · 📭 无邮箱</h1>
+
+<div style="margin:10px 0 14px;">
+  <a href="{{ url_for('email_anomalies_invalid') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);">⛔ 无效邮箱</a>
+  <a href="{{ url_for('email_anomalies_no_email') }}" class="btn primary">📭 无邮箱 · 待分析</a>
+</div>
+
+<p class="hint">获客时没拿到邮箱的企业。补到邮箱后点「关闭」移出本列表（记录保留）。</p>
+
+{% if request.args.get('msg') %}
+<p class="hint" style="color:#16a34a;">{{ request.args.get('msg') }}</p>
+{% endif %}
+
+<div class="row">
+  <form method="post" action="{{ url_for('email_anomalies_scan') }}" class="inline">
+    <button class="primary">扫描全部无邮箱企业 → 划入异常</button>
+  </form>
+  <span style="align-self:center;">
+    <a href="{{ url_for('email_anomalies_no_email', status='open') }}" class="btn" style="{{ 'opacity:.5;' if status != 'open' }}">待处理</a>
+    <a href="{{ url_for('email_anomalies_no_email', status='resolved') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);{{ 'opacity:.5;' if status != 'resolved' }}">已解决</a>
+    <a href="{{ url_for('email_anomalies_no_email', status='') }}" class="btn" style="background:#fff;color:var(--green)!important;border:1px solid var(--border);">全部</a>
+  </span>
+</div>
+
+{% if no_emails %}
+<table>
+  <thead><tr><th>企业</th><th>国家</th><th style="width:280px;">原因分析</th><th style="width:150px;">标记时间/操作者</th><th>电话</th><th>官网</th><th style="width:90px;">状态</th><th style="width:90px;">操作</th></tr></thead>
+  <tbody>
+  {% for a in no_emails %}
+    <tr>
+      <td>{% if a.main_id %}<a href="{{ url_for('company_detail', main_id=a.main_id) }}">{{ a.company_name or a.main_id }}</a>{% else %}{{ a.company_name or '—' }}{% endif %}</td>
+      <td>{{ a.country or '' }}</td>
+      <td>{{ a.reason or '' }}</td>
+      <td>
+        {% if a.created_fmt %}<div>{{ a.created_fmt }}</div>{% else %}—{% endif %}
+        {% if a.operator %}<div class="hint" style="margin:2px 0 0;">{{ a.operator }}</div>{% endif %}
+        {% if a.updated_fmt and a.updated_fmt != a.created_fmt %}<div class="hint" style="margin:2px 0 0;">末次: {{ a.updated_fmt }}</div>{% endif %}
+      </td>
+      <td>{{ a.phone or '' }}</td>
+      <td>{% if a.website %}<a href="{{ a.website }}" target="_blank">官网</a>{% endif %}</td>
+      <td>{{ '待处理' if a.status == 'open' else '已解决' }}{% if a.status == 'resolved' and a.resolved_fmt %}<div class="hint" style="margin:2px 0 0;">{{ a.resolved_fmt }}</div>{% endif %}</td>
+      <td>{% if a.status == 'open' %}<form method="post" action="{{ url_for('email_anomalies_resolve', anomaly_id=a.id) }}" class="inline"><input type="hidden" name="next" value="{{ url_for('email_anomalies_no_email', status=status) }}"><button class="muted">关闭</button></form>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">暂无无邮箱异常。点上面「扫描」把无邮箱企业划入异常。</p>
+{% endif %}
+{% endblock %}
