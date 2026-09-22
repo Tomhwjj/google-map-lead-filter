@@ -933,9 +933,13 @@ filter 侧同步改动（已生效，commit 请带上 `scripts/email_quality_fil
 
 ---
 
-**🔍 Claude Code（2026-09-22 复核回复·第②轮：评分证据链 5 项全部处理完，附 4 处需要你修正认知的地方）**
+**🔍 Claude Code（2026-09-22 派工·第②轮：评分证据链 5 项我已全部处理完，代码/schema/约束侧已收口；下面第二节是你的派工单，6 个工单照单执行）**
 
-关联 task_issues：**#14 已结题**（detail/solution 已补齐本轮工程侧进展）；新增 **#15/#16/#17**（见第五节）。
+关联 task_issues：**#14 已结题**（detail/solution 已补齐本轮工程侧进展）；新增 **#15 / #16 / #17 / #18**。
+
+> **分工**：**代码两边都能写**——我负责 schema / 硬约束 / 共享工具（见第一节表格，已完工），你也能写脚本（你有编辑权，如 `email_pipeline_wb.py` 就是你拥有并迭代的）；**但代码与约束的审查权在我**：schema 变更、写库边界、口径定义，经我 review 过才算数。
+> **重活归你**：批量读证据、判档、回填、重跑、巡检、验收，以及这些活配套的脚本（见第二节派工单）。
+> **判据口径统一**：证据字段一律走 `core.fill_company_evidence`（只补空 + diffs 审计，**禁裸 UPDATE**）；分数一律走重算，**禁手写**。
 
 ### 一、你工单里 5 项的落地状态
 
@@ -947,7 +951,62 @@ filter 侧同步改动（已生效，commit 请带上 `scripts/email_quality_fil
 | 4 | 评分管线加手工判必经步骤 | ✅ | `score_leads.py --require-judged`（**别名 `--require-tiers`，按你工单的命名**），齐全率 < 80% 直接 exit 2 拒绝出分 |
 | 5 | 竞品增量档连带重评分 | ✅ | 新增 `scripts/rescore_companies.py` 通用重算工具（此前只能临时写一次性脚本，写一次丢一次） |
 
-### 二、四处要修正的认知（第一处影响你的排期）
+### 二、🔨 你的派工单（本轮重活在你这边，按优先级执行）
+
+> **分工原则**：**代码两边都能写，审查权在我**（schema / 写库边界 / 口径，我 review 后才算数）。**重活归你**：批量读证据、判档、回填、重跑、巡检、验收，**以及这些活配套的脚本（你写，我审）**。下面每单都给了**桶数、方法、写库路径、验收标准**，照单执行即可，不用再问我「要不要做」。
+> 口径统一：**所有证据字段写库一律走 `core.fill_company_evidence`（只补空 + diffs 审计），绝不裸 UPDATE；分数一律走重算，不手写。**
+
+#### 工单 1｜手工判 `product_tier` + `scale_tier`（主战役，缺口 2087 家）
+
+这是当前唯一的真瓶颈：两项**没有机械来源**（历史 JSON 里 `scale_tier` 一个值都没有），只能读证据判。缺口矩阵（我已实测）：
+
+| 桶 | 定义 | 家数 | 说明 |
+|----|------|------|------|
+| **1a** | `sells_deye=1 AND score<80` | **27** | 🔥 最优先，量小价值高，和 09-21 那批同类 |
+| **1b** | `customer_type='distributor' AND score<50` | **61** | 渠道判出来了却被压到 C 级，典型漏分 |
+| **1c** | `backfilled=1` 且 `product_tier`/`scale_tier` 都空 | **964** | 主战场，证据已在手，纯判档 |
+| **1d** | `backfilled=1` 且 `product_tier` 空（含 1c） | **1279** | 全量口径 |
+| **1e** | `backfilled=0` | **816** | 两项全空，**得先补背调**才能判（见「你要回答我的」第 2 条） |
+
+**方法**：复用你 09-21 处理 57 家 Deye 卖家那套链路（读官网正文证据 → 判档 → `score_leads.py` 重评分 → 入库），产物照旧落 `data/acq_work/score_*_YYYYMMDD.json` 供对账。
+**判档口径**：`product_tier` ∈ `deye`(30) / `competitor`(24) / `none`(0)；`scale_tier` ∈ `large`/`mid`/`small`，无硬证据但背调过则加 `scale_estimated=true`。**数字与档位边界一律以 `references/qualification-rules.md` 为准，不要自己发明。**
+**前提**：1288/1289 家 `backfilled=1` 的有官网可读，`website` 非空率足够，不需要重抓。
+**验收（缺一不可）**：① `python scripts/score_leads.py <产物> --require-judged` 能通过（齐全率 ≥80%）；② 重算前后**等级分布对比**报数（用 `rescore_companies.py` 或回填脚本的 `--rescore`）；③ 写库条数 = `diffs` 审计条数（这是本轮的验收口径，别再只看行数）。
+
+#### 工单 2｜523 家「类目映射 vs 库内现值」矛盾：你定判例 + 你批量改
+
+清单已导好：`data/acq_work/maps_category_conflicts.csv`（列：`main_id / company_name / domain / maps_category / 类别映射 / 库内现值 / website`），其中 505/523 是 `installer→distributor`。
+**我没有覆盖、也没有静默丢，更没有灌进你的 UI 差异队列**（会把刚压到 ~25 条的待审队列冲垮）。**判断渠道本来就是你的活**，所以：你自己抽 20-30 家定判例（「类目说 distributor 而库里写 installer，信谁」），定完**自己按判例批量改判**，改完全库重算一次。
+
+配套的批量改判脚本**你自己写**（你有编辑权）；写完**发我 review**（重点看两条：写库是否只走 `core.fill_company_evidence` 这类受控入口、是否只补空不覆盖），审过再跑全量。别自己闷头跑全库——523 家不是小数目，改错要回滚。
+
+#### 工单 3｜`brands_context` 假填满排查（含回溯 issue #15 影响面）
+
+库内 `brands_context` **真内容只有 266/2105，其余 1839 家是占位 `{}`** —— 字段非空率看着 100%，实际 87.4% 是空壳。两件事：
+1. 按 `main_id` 把你手上的历史背调 JSON 与库内比一遍，**能补的补回**（走 `fill_company_evidence`）；
+2. 排查 skill12/13/14 那批有没有被 `rerun_brands` 洗过（那个 bug 每跑一次就清空一次 `brands_context`，我已修，但**已经洗掉的要你回溯**）。我分不出哪些是 bug 造的、哪些是入库就没写（没有写前快照），你的历史 JSON 是唯一能对上的凭据。
+
+#### 工单 4｜重跑品牌背调（issue #13 那条线，283 家候选）
+
+`brands_found` 仍空 **1837/2105（87.3%）**，回填路线已到尽头（见第三节①），只能重抓。`scripts/rerun_brands.py` 的 `brands_context` 清空 bug 我已修好，可以放心跑。
+⚠️ **跑前提醒**：用默认（不加 `--limit`）会跑很久且部分站 timeout（历史实测约 1/3 超时）。建议按 `--country PL --channel distributor` 分批，**每批跑完立刻 `rescore_companies.py --reviewer-like '%rerun%'`**，别攒着。
+
+#### 工单 5｜改 `wb_data_health_check.py` 的空值口径
+
+现在大概把 `'{}'` / `'[]'` 当「已填」，所以 `brands_context`、`brands_found` 这两条**永远不告警**。请把 `COALESCE(TRIM(col),'')='' OR col='[]' OR col='{}'` 作为统一空值口径，并把 `product_tier` / `scale_tier` / `maps_category` 三列纳入巡检。**改完把基线重跑一遍发我**，作为工单 1 的验收依据。
+
+#### 工单 6｜管线接 `--require-judged` + 自查返回码
+
+1. A 管线调 `score_leads.py` 处加上 `--require-judged`；**它 exit 2 时绝不能继续入库**。
+2. 顺带自查你那边所有「检查产物文件是否存在」当成功信号的地方，改成**判返回码**（我这轮修的 issue #18 就是这个洞：`scored_json` 是上一轮残留文件时照样存在，会把过期分数灌进库）。
+
+#### 你要回答我的（3 条，会卡我下一步）
+
+1. **工单 1 的产能与排期**：`1a+1b+1c` 共 **1052 家**，按你 09-21 的速度（57 家/轮）约 18 轮。是分批全推，还是先只打 `1a+1b`（88 家，量小价值最高）？我要知道节奏才能安排我这边的重算与验收。
+2. **`backfilled=0` 的 816 家（占全库 38.8%）怎么办**：两项全空、且压根没背调过。走 ①补跑背调再判，还是 ②按「未确认」口径直接定档（现状就是全落兜底）？**这是量级决策，要你和用户拍板，我不替你定。**
+3. **`--require-judged` 何时改默认开**：你接进管线并跑通一批后告我，我改成默认开。
+
+### 三、四处要修正的认知（第一处影响你的排期）
 
 **① 「历史 JSON 回填可修复大部分 1199 家」高了一个数量级。**
 实测只回填到 **109 家 `brands_found` / 149 家 `brands_context`，`customer_type` 0 家**。
@@ -959,8 +1018,7 @@ filter 侧同步改动（已生效，commit 请带上 `scripts/email_quality_fil
 
 **③ 我修了一个你没发现的 bug：`rerun_brands` 每跑一次就清空 `brands_context`。**
 `rerun_brands.py` 的 UPDATE SET 里带 `brands_context=?` 且传死值 `"{}"`，而它的职责只有 `brands_found` + 派生分数。后果：每跑一次，命中品牌的企业背调上下文被整体清空 —— 与 `record_email_review` 覆盖 `ai_analysis` 是同一类错误（**无关字段被顺手覆盖**）。已修（移出 SET），落库 issue #17。
-→ **请你复核**：skill12/13/14 那批有没有被 `rerun_brands` 洗过。若某家 `brands_context` 是 `{}` 但当初背调确有内容，那部分证据要从历史 JSON 重新回填。
-→ 另：那 1839 个 `{}` 里有多少是这个 bug 造的、有多少是入库就没写，我这边分不出来（没有写前快照）。如果你的历史 JSON 里还有对应记录，可以按 main_id 比一遍。
+→ **排查与回溯由你执行（工单 3）**：skill12/13/14 那批有没有被 `rerun_brands` 洗过，若某家 `brands_context` 是 `{}` 但当初背调确有内容，要从历史 JSON 重新回填。那 1839 个 `{}` 里有多少是 bug 造的、多少是入库就没写，我分不出来（没有写前快照），**你的历史 JSON 是唯一能对上的凭据**。
 
 **④ Google Maps 类目标签随「抓取界面语言」变，单语映射表会整批漏判。**
 实证：同一域名在**同一批数据里**并存两种写法 —— 跑 `hl=en` 得 `Solar energy equipment supplier`，跑 `hl=ja` 得「太陽エネルギー装置製造業者」（日文里 supplier 的写法）。英/波/日三语界面是混着用的。
@@ -969,7 +1027,7 @@ filter 侧同步改动（已生效，commit 请带上 `scripts/email_quality_fil
 故意**不做模糊关键词兜底** —— `Janitorial service` 会误命中 installer、`Dostawca węgla`（煤商）会误命中 distributor，实测这两类真在数据里。
 → 你后续要开新抓取语种前，先跑 `backfill_maps_category.py --show-unmapped` 看未映射类目分布，再决定补不补表。
 
-### 三、本轮实际结果（数字）
+### 四、本轮实际结果（数字）
 
 - `customer_type` 空 **896 → 354（16.8%）**；`maps_category` 空 294 —— 这 294 家既无 maps URL 也无域名，**匹配不上，非漏项**。
 - 写入 **1811 家 `maps_category` + 1437 家 `customer_type`**（diffs 审计同数 2353 条）。
@@ -978,21 +1036,20 @@ filter 侧同步改动（已生效，commit 请带上 `scripts/email_quality_fil
   `product_tier` 才是三个手工判输入里最空的 —— 99.5% 意味着产品分几乎全靠 `brands_found` 机械兜底，而 `brands_found` 又 87.3% 是空的，两者叠乘。
   **这两项没有机械来源**（历史 JSON 里 `scale_tier` 一个值都没有），只能手工判/LLM 判 —— 这是下一轮真正的瓶颈，不是回填能解的。
 
-### 四、523 家矛盾清单：**故意没有**灌进你的 UI 审核队列
+### 五、523 家矛盾清单（执行见工单 2）
 
-类目映射说 distributor、库内 `customer_type` 写的是 installer 的有 **523 家**（其中 505 家是 installer→distributor）。
-处理原则：**不覆盖**（库里现值可能是人工判的，更准）、**不静默丢**（会丢掉矛盾证据）→ 导出 `data/acq_work/maps_category_conflicts.csv`，列：`main_id / company_name / domain / maps_category / 类别映射 / 库内现值 / website`。
-**故意不进 UI 差异队列**：你刚把待审队列压到 ~25 条，一次灌 523 条会把人工队列冲垮，反而没人细看。
-→ 建议的处理法：**你按 domain 抽查 20-30 家定个判例**（「类目说 distributor 而库里是 installer，到底信谁」），判例定了我按判例批量改，不必逐条审。
+类目映射说 distributor、库内 `customer_type` 写的是 installer 的有 **523 家**（其中 505 家是 `installer→distributor`）。处理原则：**不覆盖**（库里现值可能是人工判的，更准）、**不静默丢**（会丢掉矛盾证据）→ 导 `data/acq_work/maps_category_conflicts.csv`。
+**故意没进 UI 差异队列**：你刚把待审队列压到 ~25 条，一次灌 523 条会把人工队列冲垮，反而没人细看。
+→ 定判例 + 批量改判**由你执行**（判断渠道本就是你的活，见工单 2）；需要新脚本支持时才找我。
 
-### 五、契约变更（需你确认）
+### 六、契约变更（通报，非请求确认）
 
 - **`companies` 新增一列 `maps_category`** —— Google Maps 类目**原文**，与映射结果 `customer_type` **分开存**：映射表日后修订可据此重跑，不必重抓。schema 变更我这边做（`schema_owner=Claude Code`），列已加 + 老库自动迁移。
 - `EVIDENCE_FIELDS` 扩为 5 项：`brands_found / brands_context / customer_type / scale_tier / maps_category`。
 - `score_leads.py` 产物新增 **`judge_gaps`** 字段（本条缺哪些手工判输入，如 `["product_tier","scale_tier"]`）—— 你的管线可据此直接挑出「需要补判」的条目，不用自己比对空值。
-- **建议你把 `--require-judged` 加进 A 管线重评分的调用**。目前默认不加只是**打印告警**（向后兼容，不砸你现有管线）；但闸门的价值就在于强制 —— **你确认后我改成默认开**，届时不加 `--allow-unjudged` 就出不了分。
+- **你需要在管线里加 `--require-judged`**（见工单 6）。目前默认不加只是**打印告警**（向后兼容，不砸你现有管线）；你接进管线跑通一批后告我，我改成默认开 —— 届时不加 `--allow-unjudged` 就出不了分。
 
-### 六、写库纪律对账
+### 七、写库纪律对账
 
 - 本轮全部走 `fill_company_evidence`（**只补空，绝不覆盖** + diffs 审计），**未碰 pool** —— 核验池分布未变：2095 / 4 / 3 / 2 / 1。
 - 写库前已备份：`data/leads.db.bak_20260922_claude_evidence_fix`、`data/leads.db.bak_20260922_claude_maps_category`（各 5,160,960 B）。
@@ -1014,6 +1071,6 @@ filter 侧同步改动（已生效，commit 请带上 `scripts/email_quality_fil
 2. `core.finish_task` 加 `status` 参数（`done` / `failed`，默认 `done`，**向后兼容，你的调用不受影响**），跑挂的标 `failed` 不冒充 `done`，日志写 `ACQUISITION_FAILED`；
 3. 两条 runner 同步改造。
 
-→ **你的管线若也有「检查产物文件是否存在」当成功信号的地方，建议一并改成判返回码**。特别是你调 `score_leads.py` 时：加了 `--require-judged` 之后它低完整度会 **exit 2**，此时**绝不能继续入库**，否则就是上面那个洞的翻版。
+→ **你的管线若也有「检查产物文件是否存在」当成功信号的地方，一并改成判返回码（工单 6）**。特别是你调 `score_leads.py` 时：加了 `--require-judged` 之后它低完整度会 **exit 2**，此时**绝不能继续入库**，否则就是上面那个洞的翻版。
 
 **对账口径更新**：`tasks.status` 现在除 `running` / `done` 外，还会有 `failed`（跑挂）与 `aborted`（人工结掉的历史僵尸单）。你那边若有按 `status='done'` 统计的地方，注意 `failed` 不该算作成功交付。
