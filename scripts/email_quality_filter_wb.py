@@ -34,6 +34,11 @@ TPL_LOCAL = (
 TPL_DOMAIN = (
     "mail.com", "firma.pl", "uzupelnic.pl", "example.com", "example.pl",
     "domena.pl", "email.pl.", "twojadomena.pl",
+    # 2026-09-20 每周迭代新增（退信/扫描实证）：
+    "przyklad.pl",   # 波兰语「例」= example（jan@przyklad.pl，HC INSTAL 官网抓到）
+    "kowalski.com",  # 占位姓氏做域名（jan@kowalski.com 本周退信，EcoCollect 名下）
+    "smith.com",     # 英文版 John Doe（john@smith.com，Lekkie Panele 名下）
+    "mysite.com",    # 英文建站器占位（example@mysite.com，AIRSUIT 名下）
 )
 # ---- L2: SDK/系统端点 ----
 SDK_PAT = re.compile(r"@.*(ingest\.|sentry\.io|sentry-next|hooks\.slack|amazonses\.com$)", re.I)
@@ -90,8 +95,10 @@ def check_email(email, company_domain=""):
         cd_stem, eh_stem = cd_n.split(".")[0], eh_n.split(".")[0]
         mismatch = (eh_n != cd_n and not eh_n.endswith("." + cd_n)
                     and cd_stem not in eh_n and eh_stem not in cd_n)
-        # 主机商箱无条件硬拦（①类：wsparcie/webas@cyberfolks.pl 这类建站商客服箱）
-        if d in HOSTING_PROVIDERS:
+        # 主机商箱无条件硬拦（①类：wsparcie/webas@cyberfolks.pl 这类建站商客服箱）。
+        # 2026-09-20 迭代：支持子域匹配——rodo@serwer2133633.home.pl 这类
+        # 服务器主机名子域此前绕过精确匹配，现在 *.home.pl 一并硬拦。
+        if any(d == p or d.endswith("." + p) for p in HOSTING_PROVIDERS):
             return "hard", f"L3 主机商/建站服务商箱（@{d}），非企业自有域名"
         if mismatch:
             if d in COMMON_PROVIDERS:

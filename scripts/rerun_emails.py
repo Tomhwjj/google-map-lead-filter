@@ -54,6 +54,8 @@ def clean_email(e):
     local, dom = e.rsplit("@", 1)
     # local part 开头的页码/分页粘连：纯数字、数字-数字、数字. 串
     local = re.sub(r"^(?:\d{1,4}[-._]?)+", "", local)
+    # mailto 链接 URL 编码残留前缀（%20 空格 / %09 tab / %0a %0d 换行）
+    local = re.sub(r"^(?:%20|%09|%0a|%0d)+", "", local)
     return local + "@" + dom if local and dom else ""
 
 

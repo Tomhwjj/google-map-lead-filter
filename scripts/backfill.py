@@ -8,11 +8,13 @@
     python backfill.py leads.csv --out backfill.json
 """
 import argparse
+import atexit
 import csv
 import json
 import os
 import random
 import re
+import signal
 import sys
 import time
 
@@ -151,6 +153,27 @@ def find_brands(text, brands):
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+    # 2026-09-18 WorkBuddy 加：优雅停止。CTRL_C / CTRL_BREAK 只置标志，做完当前一条、
+    # 落盘、关浏览器后退出。硬杀（taskkill /F / 关会话）也不丢数据——每条完成即原子
+    # 落盘（tmp+os.replace），任何时刻停止最多损失「正在抓的那一条」，重跑同命令即续跑。
+    _stop = {"flag": False}
+
+    def _request_stop(sig, _frm):
+        _stop["flag"] = True
+        print(f"\n[stop] 收到信号 {sig}，完成当前一条后退出（已完成记录均已落盘）", flush=True)
+
+    signal.signal(signal.SIGINT, _request_stop)          # Ctrl+C
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _request_stop)    # Ctrl+Break / taskkill 优雅信号
+
+    # 连败熔断（2026-09-20 WorkBuddy 加）：连续 NET_BREAK 条"网络死亡级"错误
+    # （ERR_INTERNET_DISCONNECTED / ERR_NETWORK_IO_SUSPENDED）即判定本机断网并停止，
+    # 防止断网后把剩余队列逐条刷成假失败（2026-09-19 教训：451 家被污染需整轮重试）。
+    # 只认断网类签名：DNS 失败（死域名）与 ERR_CONNECTION_CLOSED（反爬/烂服务器）
+    # 不计数，避免误熔断。
+    NET_BREAK = 5
+    _net_fail = {"n": 0}
+
     ap = argparse.ArgumentParser(description="背调：抓官网提取邮箱/正文")
     ap.add_argument("csv", help="fetch_gmaps.py 输出的 CSV")
     ap.add_argument("--out", default="backfill.json", help="输出 JSON 路径")
@@ -159,9 +182,43 @@ def main():
     ap.add_argument("--brands", default="", help="品牌列表（我方+贴牌+竞品），逗号分隔，如 'Deye,Sungrow,Huawei'")
     ap.add_argument("--deye", default="", help="我方品牌（含贴牌），逗号分隔。品牌页抓到命中这些为止（命中竞品不算，继续找 Deye）")
     ap.add_argument("--fast", action="store_true", help="快速模式：只抓首页+品牌页找品牌，跳过 contact 页")
+    ap.add_argument("--goto-timeout", type=int, default=35000, help="首页 goto 超时毫秒（2026-09-20 起默认 35000；20s 时代超时偏紧损失大量慢站）")
     args = ap.parse_args()
     brands = [b.strip() for b in (args.brands or "").split(",") if b.strip()]
     deye_brands = {b.strip().lower() for b in (args.deye or "").split(",") if b.strip()}
+
+    # 2026-09-18 WorkBuddy 加：防双开锁。同一 out 文件同时只允许一个实例，
+    # 否则两个进程交替写同一个 json 会互相覆盖丢数据（自动化触发撞上手动续跑的风险）。
+    # 锁内容是 PID：持有者死了（硬杀后残留锁）下次启动自动清理，不会卡死。
+    lock_path = args.out + ".lock"
+
+    def _pid_alive(pid):
+        if pid <= 0:
+            return False
+        try:
+            import ctypes
+            h = ctypes.windll.kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+            if h:
+                ctypes.windll.kernel32.CloseHandle(h)
+                return True
+            return False
+        except Exception:
+            return True  # 判不了就保守当活着
+
+    if os.path.exists(lock_path):
+        try:
+            old_pid = int(open(lock_path, encoding="utf-8").read().strip() or 0)
+        except Exception:
+            old_pid = 0
+        if _pid_alive(old_pid):
+            print(f"[exit] 已有实例在运行 (PID {old_pid}，锁 {lock_path})，本实例直接退出："
+                  f"不重复跑、不碰数据文件，重跑是安全的。", flush=True)
+            return
+        print(f"[lock] 清理失效锁 (旧 PID {old_pid})", flush=True)
+    with open(lock_path, "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
+    atexit.register(lambda: os.path.exists(lock_path) and os.remove(lock_path))
+
     contact_paths = [] if args.fast else CONTACT_PATHS
     brand_paths = BRAND_PATHS[:2] if args.fast else BRAND_PATHS
     home_sleep = 0.5 if args.fast else random.uniform(1, 2)
@@ -179,11 +236,12 @@ def main():
         try:
             with open(args.out, encoding="utf-8") as f:
                 results = json.load(f)
-            done_keys = {
-                ((r.get("website") or "").strip().lower()
-                 or (r.get("company_name") or "").strip().lower())
-                for r in results
-            }
+            done_keys = set()
+            for r in results:
+                k = ((r.get("website") or "").strip().rstrip("/").lower()
+                     or (r.get("company_name") or "").strip().lower())
+                if k:
+                    done_keys.add(k)
             print(f"断点续跑：已有 {len(results)} 条，跳过已完成", flush=True)
         except Exception as e:
             print(f"[warn] 断点文件损坏，从头开始: {e}", flush=True)
@@ -205,16 +263,21 @@ def main():
             launch_kwargs["args"] = ["--no-proxy-server"]
         browser = p.chromium.launch(**launch_kwargs)
         ctx = browser.new_context(user_agent=UA, locale="en-US",
-                                  viewport={"width": 1280, "height": 800})
+                                  viewport={"width": 1280, "height": 800},
+                                  ignore_https_errors=True)  # 2026-09-16: 证书无效/过期站照抓（此前 ~15 家 CERT 错误直接丢弃）
         page = ctx.new_page()
 
         for i, lead in enumerate(leads):
+            if _stop["flag"]:
+                print(f"[stop] 在第 {i + 1}/{len(leads)} 条前停止：已完成 {len(results)} 条，"
+                      f"断点已落盘，重跑同命令即无损续跑。", flush=True)
+                break
             if args.max and i >= args.max:
                 break
             name = lead.get("company_name", "").strip()
             website = (lead.get("website") or "").strip()
-            # 断点跳过：website 优先（空则退回公司名）
-            _key = (website or name).strip().lower()
+            # 断点跳过：website 优先（空则退回公司名），统一去尾部斜杠避免变体重做
+            _key = (website or name).strip().rstrip("/").lower()
             if _key and _key in done_keys:
                 print(f"[{i + 1}/{len(leads)}] {name}: 已完成，跳过", flush=True)
                 continue
@@ -237,7 +300,7 @@ def main():
                 texts = []
                 home_html = ""  # 首页原始 HTML，供品牌链接自动提取（不落库）
                 try:
-                    page.goto(website, timeout=20000, wait_until="domcontentloaded")
+                    page.goto(website, timeout=args.goto_timeout, wait_until="domcontentloaded")
                     try:
                         page.wait_for_load_state("networkidle", timeout=6000)
                     except Exception:
@@ -269,9 +332,9 @@ def main():
 
                 rec["body"] = " ".join(texts)[:8000]
                 if brands and rec["body"]:
-                    ctx = find_brands(rec["body"], brands)
-                    rec["brands_found"] = list(ctx.keys())
-                    rec["brands_context"] = ctx
+                    brand_ctx = find_brands(rec["body"], brands)  # 勿名 ctx：会遮蔽 Playwright context
+                    rec["brands_found"] = list(brand_ctx.keys())
+                    rec["brands_context"] = brand_ctx
 
                 # 品牌页（没确认卖我方品牌时继续抓——命中竞品不代表排除卖 Deye）
                 # 传了 --deye：抓到命中我方品牌才停；没传：命中任意品牌即停（原逻辑）
@@ -297,9 +360,9 @@ def main():
                                 pass
                             time.sleep(random.uniform(0.3, 0.6))
                             texts.append((page.inner_text("body") or "")[:3000])
-                            ctx = find_brands(" ".join(texts), brands)
-                            rec["brands_found"] = list(ctx.keys())
-                            rec["brands_context"] = ctx
+                            brand_ctx = find_brands(" ".join(texts), brands)
+                            rec["brands_found"] = list(brand_ctx.keys())
+                            rec["brands_context"] = brand_ctx
                         except Exception:
                             pass
             else:
@@ -309,11 +372,29 @@ def main():
             _save()  # 逐条落盘，断电/中断不丢
             print(f"[{i + 1}/{len(leads)}] {name}: {len(rec['emails'])} emails, "
                   f"brands={rec['brands_found']}", flush=True)
+            # 连败熔断检查：断网签名连击即停，并回滚全部断网假失败记录
+            # （回滚后断点键不再包含它们，恢复网络重跑同命令会真正重抓，而不是跳过）。
+            if "ERR_INTERNET_DISCONNECTED" in rec["error"] or \
+                    "ERR_NETWORK_IO_SUSPENDED" in rec["error"]:
+                _net_fail["n"] += 1
+                if _net_fail["n"] >= NET_BREAK:
+                    before = len(results)
+                    results = [r for r in results
+                               if "ERR_INTERNET_DISCONNECTED" not in (r.get("error") or "")
+                               and "ERR_NETWORK_IO_SUSPENDED" not in (r.get("error") or "")]
+                    _save()
+                    _stop["flag"] = True
+                    print(f"[熔断] 连续 {NET_BREAK} 条断网级错误，判定本机断网，停止运行；"
+                          f"已回滚 {before - len(results)} 条断网假失败"
+                          f"（恢复网络后重跑同命令即补抓）。", flush=True)
+            else:
+                _net_fail["n"] = 0
 
         browser.close()
 
     _save()
-    print(f"背调完成: {len(results)} 条 -> {args.out}")
+    tail = "已停止（断点已保存，重跑同命令续跑）" if _stop["flag"] else "背调完成"
+    print(f"{tail}: {len(results)} 条 -> {args.out}")
 
 
 if __name__ == "__main__":

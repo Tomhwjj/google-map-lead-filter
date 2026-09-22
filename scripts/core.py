@@ -453,6 +453,13 @@ _JUNK_EMAIL_DOMAINS = {
     # 2026-09-13 WorkBuddy 补充：模板/表单占位域名（退信实证，见对接板同日帖）
     "mail.com", "firma.pl", "uzupelnic.pl",          # twoja.nazwa@mail.com / jan@firma.pl / prosze@uzupelnic.pl
     "domena.pl", "twojadomena.pl", "twoja-domena.pl", # 「你的域名」类表单占位
+    # 2026-09-20 每周过滤迭代（Claude 已复核，见对接板同日帖）：4 个占位域，全部精确匹配，
+    # 不涉裸姓氏误杀——kowalski.com 是「姓氏跑到域名里」的占位变体，
+    # 与 _JUNK_EMAIL_HINTS 的 local-part 整词 jankowalski 互补，真人 kowalski.m@el-plus.pl 照常放行。
+    "przyklad.pl",                                   # 波兰语「例」= example：jan@przyklad.pl（HC INSTAL 名下模板残留）
+    "kowalski.com",                                  # 占位姓氏做域名（波兰版 John Doe 变体）：jan@kowalski.com 本周实证退信
+    "smith.com",                                     # 英文版 John Doe：john@smith.com（Lekkie Panele 名下抓取残留）
+    "mysite.com",                                    # 英文建站器占位域（同 company.com/home.com 家族）：example@mysite.com
 }
 # 前缀/子串提示（no-reply 机器人、PrestaShop 授权邮箱等）
 # 2026-09-13 WorkBuddy 补充：波兰表单/模板占位词。注意用整词不带裸姓氏
