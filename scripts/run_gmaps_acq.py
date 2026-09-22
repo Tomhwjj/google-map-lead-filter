@@ -32,6 +32,16 @@ def sh(step, argv, log):
     return r.returncode
 
 
+def fail_task(task_id, log):
+    """中止流水线：标 failed（不冒充 done），日志留痕。"""
+    try:
+        finish_task(task_id, status="failed")
+        log.write("ACQUISITION_FAILED\n")
+    except Exception as e:
+        log.write(f"[finish_task 失败] {e}\n")
+    log.flush()
+
+
 def main():
     ap = argparse.ArgumentParser(description="gmaps 单源获客流水线")
     ap.add_argument("--country", required=True, help="国家码，如 PL")
@@ -81,6 +91,14 @@ def main():
     if args.locale:
         argv += ["--locale", args.locale]
     rc = sh("1.Maps抓取(fetch_gmaps)", argv, log)
+    if rc != 0:
+        # 抓取挂了就别往下走：work 目录里的 gmaps.csv 可能是上一轮的残留，
+        # merge 它会安静地把旧数据当新数据灌进库。
+        log.write(f"[abort] 抓取步骤 exit {rc}，中止流水线（不 merge 残留文件）\n")
+        fail_task(task_id, log)
+        log.close()
+        print(f"FAILED 抓取步骤 exit {rc}")
+        return
 
     # 2. 合并去重
     sh("2.合并去重(merge_leads)",
@@ -96,16 +114,24 @@ def main():
        + (["--fast"] if args.backfill_fast else []), log)
 
     # 4. 评分分级
-    sh("4.评分分级(score_leads)",
-       [PYTHON, os.path.join(runner.SCRIPTS_DIR, "score_leads.py"), backfill_json,
-        "--out", scored_json], log)
+    # 2026-09-22（task_issues #14）：rc 同 runner.py step5 —— 评分失败不入库，
+    # 否则 scored_json 的上一轮残留照样存在，「存在即入库」等于把过期分数灌进库。
+    rc_score = sh("4.评分分级(score_leads)",
+                  [PYTHON, os.path.join(runner.SCRIPTS_DIR, "score_leads.py"), backfill_json,
+                   "--out", scored_json], log)
 
     # 5. 三段式入库 + 收尾
     log.write("\n===== 5.三段式入库(ingest) =====\n")
     log.flush()
     stats = {"total": 0, "new": 0, "dup": 0, "diff": 0}
+    ok = True
+    if rc_score != 0:
+        ok = False
+        log.write(f"[abort] 评分步骤 exit {rc_score}，跳过入库"
+                  f"（避免把过期/缺失的评分产物灌进库）\n")
+        log.flush()
     try:
-        if os.path.exists(scored_json):
+        if ok and os.path.exists(scored_json):
             leads = json.load(open(scored_json, encoding="utf-8"))
             if isinstance(leads, dict):
                 leads = leads.get("leads") or leads.get("results") or []
@@ -113,15 +139,17 @@ def main():
                 stats = ingest_leads(leads, task_id)
         log.write(json.dumps(stats, ensure_ascii=False) + "\n")
     except Exception as e:
+        ok = False
         log.write(f"[ingest 失败] {type(e).__name__}: {e}\n")
     finally:
         try:
-            finish_task(task_id)
-            log.write("ACQUISITION_DONE\n")
+            # 跑挂的标 failed，不冒充 done（否则僵尸单与正常单在库里长得一样）
+            finish_task(task_id, status="done" if ok else "failed")
+            log.write("ACQUISITION_DONE\n" if ok else "ACQUISITION_FAILED\n")
         except Exception as e:
             log.write(f"[finish_task 失败] {e}\n")
     log.close()
-    print(f"DONE stats={json.dumps(stats, ensure_ascii=False)}")
+    print(f"{'DONE' if ok else 'FAILED'} stats={json.dumps(stats, ensure_ascii=False)}")
 
 
 if __name__ == "__main__":

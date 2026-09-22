@@ -53,7 +53,13 @@
       <td><code>{{ t.task_id }}</code></td>
       <td>{{ t.country or '—' }}</td>
       <td>{{ t.started_at or '—' }}</td>
-      <td>{{ '进行中' if t.status == 'running' else '已完成' }}</td>
+      {# 2026-09-22：原先「非 running 一律显示已完成」——跑挂的单和正常跑完长得一样。
+         现在有 failed / aborted 两个终态（issue #18），如实分档显示。 #}
+      <td>{% if t.status == 'running' %}进行中
+          {% elif t.status == 'done' %}已完成
+          {% elif t.status == 'failed' %}❌ 失败
+          {% elif t.status == 'aborted' %}⏹ 已中止
+          {% else %}{{ t.status }}{% endif %}</td>
       <td>{{ t.new_count }}</td>
       <td>{{ t.dup_count }}</td>
       <td>{{ t.diff_count }}</td>

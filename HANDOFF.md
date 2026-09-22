@@ -39,7 +39,8 @@
   - **修 1 个 WorkBuddy 未发现的 bug（issue #15）**：`rerun_brands.py` 的 UPDATE SET 里带 `brands_context=?` 传死值 `"{}"`，**每跑一次就把背调上下文证据清空**——与 `record_email_review` 覆盖 `ai_analysis` 同一类「无关字段被顺手覆盖」。已移出 SET。⚠️ 副作用待查：库内 `brands_context` 非空但真内容只有 **266/2105**，其余 1839 个是占位 `{}`（有多少是本 bug 造的、多少是入库就没写，无写前快照分不出来）。
   - **尚未解决（下一轮真瓶颈）**：三个手工判输入里最空的两个**没有机械来源**——`product_tier` 空 **2095（99.5%）**、`scale_tier` 空 **1780（84.6%）**（历史 JSON 里 `scale_tier` 一个值都没有）。只能 Claude 读 body/LLM 判，不是回填能解的。`product_tier` 99.5% 空 × `brands_found` 87.3% 空 → 产品分几乎全落 0。
   - **纪律核验**：全部走 `fill_company_evidence`（只补空 + diffs 审计），**未碰 pool**（池分布未变 2095/4/3/2/1）；写前备份 `leads.db.bak_20260922_claude_{evidence_fix,maps_category}`；幂等性已验（重跑 dry 报 `[待补] 0 家`）。
-  - **落库**：#14 结题（detail/solution 补齐）+ 新增 #15（无关字段被覆盖族）/ #16（类目语言依赖）/ #17（派生分无通用重算工具）。
+  - **顺手修一个让闸门失效的洞（issue #18）**：`runner.py` 的 `run_step` 与 `run_gmaps_acq.py` 的 `sh` **丢弃子步骤返回码**，而入库守卫是「`scored_json` 存在就入库」——两者相加，评分失败时只要 work 目录还留着上一轮的 `leads_scored.json`，就会把**过期分数**安静灌进库（抓取步骤同理，merge 会去合并残留 `gmaps.csv`）。已修：抓取/评分返回码纳入判定、非 0 中止并跳过入库；`core.finish_task` 加 `status` 参数（`done`/`failed`，默认 done 向后兼容），跑挂的标 `failed` 不冒充 `done`（这正是「跑挂」与「跑完」在库里长得一样、DE 僵尸单积下来的根源），日志写 `ACQUISITION_FAILED`。**配合 item4：`--require-judged` 的 exit 2 现在真的会拦住入库，不再只是打印一行字。**
+  - **落库**：#14 结题（detail/solution 补齐）+ 新增 #15（无关字段被覆盖族）/ #16（类目语言依赖）/ #17（派生分无通用重算工具）/ #18（流水线丢弃返回码）。
   - **对接**：`对接-workbuddy.md` 已写第②轮复核回复，含 4 处需其修正认知的地方（预估高一个数量级 / `brands_context` 假填满 / rerun_brands 清空 bug 待其复核影响面 / 类目语言依赖）+ 契约变更（新增 `maps_category` 列、`EVIDENCE_FIELDS` 5 项、`judge_gaps` 字段、建议管线加 `--require-judged`）。
 
 - **2026-09-14（Claude Code 把关复核 + 全量 commit）**：

@@ -335,7 +335,10 @@ def launch_acquisition(task_id, country="", log_dir=None):
             "--deye", "Deye,Sunsynk,Sol-Ark,INGE,Fusion,OHm,Noark"])  # 正式跑全量模式（--fast 仅限测试，勿加回）
 
         # 5. 双模式评分 + 分级
-        run_step("5.评分分级(score_leads)", [
+        # 2026-09-22（task_issues #14）：rc 原先被丢掉，评分失败也照常入库 —— 而
+        # scored_json 若是上一轮的残留文件就照样存在，「存在即入库」等于把过期分数灌进库。
+        # 现在评分失败一律不入库。加 --require-judged 后这里就是手工判闸门的实际落点。
+        rc_score = run_step("5.评分分级(score_leads)", [
             PYTHON, os.path.join(SCRIPTS_DIR, "score_leads.py"), backfill_json,
             "--out", scored_json])
 
@@ -344,8 +347,14 @@ def launch_acquisition(task_id, country="", log_dir=None):
             f.write("\n===== 6.三段式入库(ingest) =====\n")
             f.flush()
             stats = {"total": 0, "new": 0, "dup": 0, "diff": 0}
+            ok = True
+            if rc_score != 0:
+                ok = False
+                f.write(f"[abort] 评分步骤 exit {rc_score}，跳过入库"
+                        f"（避免把过期/缺失的评分产物灌进库）\n")
+                f.flush()
             try:
-                if os.path.exists(scored_json):
+                if ok and os.path.exists(scored_json):
                     leads = json.load(open(scored_json, encoding="utf-8"))
                     if isinstance(leads, dict):
                         leads = leads.get("leads") or leads.get("results") or []
@@ -353,11 +362,13 @@ def launch_acquisition(task_id, country="", log_dir=None):
                         stats = ingest_leads(leads, task_id)
                 f.write(json.dumps(stats, ensure_ascii=False) + "\n")
             except Exception as e:
+                ok = False
                 f.write(f"[ingest 失败] {type(e).__name__}: {e}\n")
             finally:
                 try:
-                    finish_task(task_id)
-                    f.write("ACQUISITION_DONE\n")
+                    # 跑挂的标 failed，不冒充 done（否则僵尸单与正常单在库里长得一样）
+                    finish_task(task_id, status="done" if ok else "failed")
+                    f.write("ACQUISITION_DONE\n" if ok else "ACQUISITION_FAILED\n")
                 except Exception as e:
                     f.write(f"[finish_task 失败] {e}\n")
 

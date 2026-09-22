@@ -72,8 +72,15 @@ def start_task(country="", keywords=None, sources=None, db_path=None):
     return task_id
 
 
-def finish_task(task_id, db_path=None):
-    """结束任务：写结束时间戳 + 运行时长（秒），状态置 done。"""
+def finish_task(task_id, db_path=None, status="done"):
+    """结束任务：写结束时间戳 + 运行时长（秒），状态置 done。
+
+    status（2026-09-22 加，task_issues #14）：跑挂了的任务标 'failed'，不冒充 done ——
+    原先只有 done 一个终态，于是「跑了一半死掉」和「正常跑完」在库里长得一模一样，
+    只能靠翻日志区分（DE 两单僵尸任务就是这么积下来的）。默认 done，老调用不受影响。
+    """
+    if status not in ("done", "failed"):
+        raise ValueError(f"非法任务终态: {status}（只允许 done / failed）")
     conn = init_db(db_path)
     row = conn.execute("SELECT started_at FROM tasks WHERE task_id=?", (task_id,)).fetchone()
     if not row:
@@ -87,8 +94,8 @@ def finish_task(task_id, db_path=None):
         except Exception:
             pass
     conn.execute(
-        "UPDATE tasks SET finished_at=?, duration_sec=?, status='done' WHERE task_id=?",
-        (now, duration, task_id))
+        "UPDATE tasks SET finished_at=?, duration_sec=?, status=? WHERE task_id=?",
+        (now, duration, status, task_id))
     conn.commit()
     conn.close()
     return {"task_id": task_id, "finished_at": now, "duration_sec": duration}

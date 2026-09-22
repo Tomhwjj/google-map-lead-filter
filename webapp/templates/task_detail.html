@@ -8,6 +8,14 @@
 <p class="hint" style="background:#eff6ff;border-color:#bfdbfe;">📝 获客任务单已创建。线索采集/评分/入库走命令行脚本（search_leads → fetch_enf → merge → backfill → score → ingest_leads），完成后本页显示结果。</p>
 {% endif %}
 
+{# 2026-09-22（issue #18）：跑挂 / 被中止的单不能再长得跟正常跑完一样。
+   失败的常见原因之一是评分闸门 exit 2（手工判证据不齐），此时**未入库**。 #}
+{% if t.status == 'failed' %}
+<p class="hint" style="background:#fef2f2;border-color:#fecaca;">❌ 本次流水线**失败中止**（未入库，或入库中断）。看流水线日志定位是哪一步挂了；若是评分闸门 exit 2，说明手工判证据不齐（`customer_type` / `product_tier` / `scale_tier`），补判后重跑。</p>
+{% elif t.status == 'aborted' %}
+<p class="hint" style="background:#f8fafc;border-color:#e2e8f0;">⏹ 本任务被人工中止（历史僵尸单清理）。</p>
+{% endif %}
+
 <div class="stats">
   <div class="stat"><b>{{ data.stats.new }}</b><span>新增</span></div>
   <div class="stat"><b>{{ data.stats.dup }}</b><span>重复</span></div>

@@ -997,3 +997,23 @@ filter 侧同步改动（已生效，commit 请带上 `scripts/email_quality_fil
 - 本轮全部走 `fill_company_evidence`（**只补空，绝不覆盖** + diffs 审计），**未碰 pool** —— 核验池分布未变：2095 / 4 / 3 / 2 / 1。
 - 写库前已备份：`data/leads.db.bak_20260922_claude_evidence_fix`、`data/leads.db.bak_20260922_claude_maps_category`（各 5,160,960 B）。
 - 幂等性已验：重跑回填 dry 报 `[待补] 0 家`。
+
+**🔍 Claude Code（2026-09-22 追加：顺手修了一个让上条 item4 闸门失效的洞，issue #18）**
+
+做 `--require-judged` 时发现：**它在我方两条流水线里原本拦不住任何东西** ——
+
+- `runner.py` 的 `run_step` 和 `run_gmaps_acq.py` 的 `sh` 都只把 `[exit N]` 写进日志，**返回值没人判**；
+- 入库步骤的守卫是「`scored_json` 存在就入库」。
+
+两者相加的后果：评分步骤失败（或本次压根没产出）时，只要 work 目录里还留着**上一轮**的 `leads_scored.json`，就会把**过期分数**安静地灌进库，日志里只有一个不起眼的 `[exit 1]` 可循。抓取步骤同理 —— `merge` 会去合并残留的 `gmaps.csv`，把旧数据当新数据入库。
+
+**这也是「跑挂」和「跑完」在库里长得一模一样的根源**（DE 两单僵尸任务就是这么积下来的，我已按约定清掉：`T20260904225744` / `T20260905125956` 置 `aborted`，`tasks` 表归我）。
+
+已修：
+1. 抓取 / 评分步骤返回码纳入判定，非 0 **中止后续步骤并跳过入库**；
+2. `core.finish_task` 加 `status` 参数（`done` / `failed`，默认 `done`，**向后兼容，你的调用不受影响**），跑挂的标 `failed` 不冒充 `done`，日志写 `ACQUISITION_FAILED`；
+3. 两条 runner 同步改造。
+
+→ **你的管线若也有「检查产物文件是否存在」当成功信号的地方，建议一并改成判返回码**。特别是你调 `score_leads.py` 时：加了 `--require-judged` 之后它低完整度会 **exit 2**，此时**绝不能继续入库**，否则就是上面那个洞的翻版。
+
+**对账口径更新**：`tasks.status` 现在除 `running` / `done` 外，还会有 `failed`（跑挂）与 `aborted`（人工结掉的历史僵尸单）。你那边若有按 `status='done'` 统计的地方，注意 `failed` 不该算作成功交付。
