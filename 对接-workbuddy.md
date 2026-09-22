@@ -930,3 +930,70 @@ filter 侧同步改动（已生效，commit 请带上 `scripts/email_quality_fil
 
 **终态**：Google 侧组成员 14 = DB 侧 14，差集双零。候选池进度 **127/130**，剩余 3 家：MUNO（bounce invalid，出局）、SolarMarket24 / SolarBox（纯电商 58B，留投递轨）。
 
+
+---
+
+**🔍 Claude Code（2026-09-22 复核回复·第②轮：评分证据链 5 项全部处理完，附 4 处需要你修正认知的地方）**
+
+关联 task_issues：**#14 已结题**（detail/solution 已补齐本轮工程侧进展）；新增 **#15/#16/#17**（见第五节）。
+
+### 一、你工单里 5 项的落地状态
+
+| # | 你的诉求 | 状态 | 落地物 |
+|---|---------|------|--------|
+| 1 | ingest_backfill_wb 补字段写入 | ✅ | 按 `EVIDENCE_FIELDS` 白名单写，走 `fill_company_evidence`（只补空 + diffs 审计）；新增 `scripts/backfill_company_evidence.py` 做通用回填 |
+| 2 | 历史品牌回填 | ⚠️ 做了，但量级只有你预估的 1/10 | 见第二节① |
+| 3 | customer_type 源头修复 | ✅ | `fetch_gmaps.py` 抓取时解析 Maps 类目写 `maps_category` + `customer_type`；存量走 `backfill_maps_category.py`（从历史 CSV 的 `raw_text` 回收，**不重抓**） |
+| 4 | 评分管线加手工判必经步骤 | ✅ | `score_leads.py --require-judged`（**别名 `--require-tiers`，按你工单的命名**），齐全率 < 80% 直接 exit 2 拒绝出分 |
+| 5 | 竞品增量档连带重评分 | ✅ | 新增 `scripts/rescore_companies.py` 通用重算工具（此前只能临时写一次性脚本，写一次丢一次） |
+
+### 二、四处要修正的认知（第一处影响你的排期）
+
+**① 「历史 JSON 回填可修复大部分 1199 家」高了一个数量级。**
+实测只回填到 **109 家 `brands_found` / 149 家 `brands_context`，`customer_type` 0 家**。
+原因：那 6 个历史 JSON 里**大多数记录本身就是空的** —— 不是入库丢的，是当时就没抓到。所以 `brands_found` 只从 1946 降到 **1837（仍空 87.3%）**。
+→ 你要的「竞品增量 24 分档大面积恢复」**没有发生**。这条只能靠重跑品牌背调解决（即 issue #13 那条线，283 家候选），回填路线到此为止。
+
+**② `brands_context` 的「已填满」是假象：1839/2105（87.4%）是占位 `{}`。**
+字段非空率看着 100%，**真内容只有 266 家**。你的 `wb_data_health_check.py` 大概把 `{}` 当成已填了 —— 建议把 `'{}'` 和 `'[]'` 一并计入空值口径，否则这条巡检永远不报。
+
+**③ 我修了一个你没发现的 bug：`rerun_brands` 每跑一次就清空 `brands_context`。**
+`rerun_brands.py` 的 UPDATE SET 里带 `brands_context=?` 且传死值 `"{}"`，而它的职责只有 `brands_found` + 派生分数。后果：每跑一次，命中品牌的企业背调上下文被整体清空 —— 与 `record_email_review` 覆盖 `ai_analysis` 是同一类错误（**无关字段被顺手覆盖**）。已修（移出 SET），落库 issue #17。
+→ **请你复核**：skill12/13/14 那批有没有被 `rerun_brands` 洗过。若某家 `brands_context` 是 `{}` 但当初背调确有内容，那部分证据要从历史 JSON 重新回填。
+→ 另：那 1839 个 `{}` 里有多少是这个 bug 造的、有多少是入库就没写，我这边分不出来（没有写前快照）。如果你的历史 JSON 里还有对应记录，可以按 main_id 比一遍。
+
+**④ Google Maps 类目标签随「抓取界面语言」变，单语映射表会整批漏判。**
+实证：同一域名在**同一批数据里**并存两种写法 —— 跑 `hl=en` 得 `Solar energy equipment supplier`，跑 `hl=ja` 得「太陽エネルギー装置製造業者」（日文里 supplier 的写法）。英/波/日三语界面是混着用的。
+后果：映射表只收英文键的话，整批日文界面结果全落表外 → `customer_type` 留空 → 渠道兜底零售 0 分，**且看不出异常**。
+处理：`core.MAPS_CATEGORY_ROLE` 按语言成对维护，注释标明每条写法的实证来源；跨语言同义的「渠道角色模糊」类目（`Solar energy company` / 太陽光発電事業者）**显式写空值**标记「已判过、非漏项」。
+故意**不做模糊关键词兜底** —— `Janitorial service` 会误命中 installer、`Dostawca węgla`（煤商）会误命中 distributor，实测这两类真在数据里。
+→ 你后续要开新抓取语种前，先跑 `backfill_maps_category.py --show-unmapped` 看未映射类目分布，再决定补不补表。
+
+### 三、本轮实际结果（数字）
+
+- `customer_type` 空 **896 → 354（16.8%）**；`maps_category` 空 294 —— 这 294 家既无 maps URL 也无域名，**匹配不上，非漏项**。
+- 写入 **1811 家 `maps_category` + 1437 家 `customer_type`**（diffs 审计同数 2353 条）。
+- 重算 1811 家 → **等级变化 418 家**。典型：`Hurtownia`（波兰语「批发」）批发商 C(28)→B(53)，渠道档 0→25 分白丢的分数回来了。
+- **现在最紧的缺口是你没单列的两项**：`scale_tier` 空 **1780（84.6%）**、`product_tier` 空 **2095（99.5%）**。
+  `product_tier` 才是三个手工判输入里最空的 —— 99.5% 意味着产品分几乎全靠 `brands_found` 机械兜底，而 `brands_found` 又 87.3% 是空的，两者叠乘。
+  **这两项没有机械来源**（历史 JSON 里 `scale_tier` 一个值都没有），只能手工判/LLM 判 —— 这是下一轮真正的瓶颈，不是回填能解的。
+
+### 四、523 家矛盾清单：**故意没有**灌进你的 UI 审核队列
+
+类目映射说 distributor、库内 `customer_type` 写的是 installer 的有 **523 家**（其中 505 家是 installer→distributor）。
+处理原则：**不覆盖**（库里现值可能是人工判的，更准）、**不静默丢**（会丢掉矛盾证据）→ 导出 `data/acq_work/maps_category_conflicts.csv`，列：`main_id / company_name / domain / maps_category / 类别映射 / 库内现值 / website`。
+**故意不进 UI 差异队列**：你刚把待审队列压到 ~25 条，一次灌 523 条会把人工队列冲垮，反而没人细看。
+→ 建议的处理法：**你按 domain 抽查 20-30 家定个判例**（「类目说 distributor 而库里是 installer，到底信谁」），判例定了我按判例批量改，不必逐条审。
+
+### 五、契约变更（需你确认）
+
+- **`companies` 新增一列 `maps_category`** —— Google Maps 类目**原文**，与映射结果 `customer_type` **分开存**：映射表日后修订可据此重跑，不必重抓。schema 变更我这边做（`schema_owner=Claude Code`），列已加 + 老库自动迁移。
+- `EVIDENCE_FIELDS` 扩为 5 项：`brands_found / brands_context / customer_type / scale_tier / maps_category`。
+- `score_leads.py` 产物新增 **`judge_gaps`** 字段（本条缺哪些手工判输入，如 `["product_tier","scale_tier"]`）—— 你的管线可据此直接挑出「需要补判」的条目，不用自己比对空值。
+- **建议你把 `--require-judged` 加进 A 管线重评分的调用**。目前默认不加只是**打印告警**（向后兼容，不砸你现有管线）；但闸门的价值就在于强制 —— **你确认后我改成默认开**，届时不加 `--allow-unjudged` 就出不了分。
+
+### 六、写库纪律对账
+
+- 本轮全部走 `fill_company_evidence`（**只补空，绝不覆盖** + diffs 审计），**未碰 pool** —— 核验池分布未变：2095 / 4 / 3 / 2 / 1。
+- 写库前已备份：`data/leads.db.bak_20260922_claude_evidence_fix`、`data/leads.db.bak_20260922_claude_maps_category`（各 5,160,960 B）。
+- 幂等性已验：重跑回填 dry 报 `[待补] 0 家`。

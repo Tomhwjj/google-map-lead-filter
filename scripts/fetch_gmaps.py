@@ -33,14 +33,23 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from playwright.sync_api import sync_playwright
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from core import extract_maps_category, map_maps_category  # noqa: E402
+
 # 默认走本机代理（访问 Google 需要），可用 --proxy 覆盖
 DEFAULT_PROXY = "http://127.0.0.1:33210"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
 # query 列 = 产出该条的搜索词（获客源效果分析用：哪个词/哪类词命中多）
+# maps_category / customer_type（2026-09-22 加，task_issues #14 item3 源头修复）：
+#   卡片自带类目（div.W4Efsd 首块，如 "Solar energy equipment supplier · 地址"）。
+#   maps_category 存**原文**（抓取证据），customer_type 存白名单映射后的渠道角色
+#   （core.MAPS_CATEGORY_ROLE，表外留空交手工判，不猜）。此前类目只烂在 raw_text 里，
+#   入库后 customer_type 全空 → 渠道档 0 分。
 CSV_FIELDS = ["company_name", "rating", "phone", "website",
-              "google_maps_url", "raw_text", "query", "country"]
+              "google_maps_url", "raw_text", "query", "country",
+              "maps_category", "customer_type"]
 
 
 def extract_real_url(href):
@@ -107,6 +116,11 @@ def parse_article(article):
             website = href
             break
 
+    # 类目：卡片里紧跟评分行的 "类目 · 地址"，取 '·' 前段。
+    # 解析走 core.extract_maps_category —— 与存量回填（scan 历史 CSV 的 raw_text）
+    # **同一套逻辑**，避免线上抓取与历史回填两套口径漂移。
+    maps_category = extract_maps_category(text)
+
     return {
         "company_name": name,
         "rating": rating,
@@ -114,6 +128,8 @@ def parse_article(article):
         "website": website,
         "google_maps_url": maps_url,
         "raw_text": text,  # 整块文本，含品类/地址/营业状态，供后续精判
+        "maps_category": maps_category,          # 类目原文（证据，可复核）
+        "customer_type": map_maps_category(maps_category),  # 白名单映射，表外为空
     }
 
 

@@ -64,6 +64,10 @@ python scripts/fetch_gmaps.py "hurtownik magazynów energii Warszawa" --max 50 -
 
 ⚠️ **单查询 feed 硬上限 ~120 条**（实际稳定 50-100）——突破靠关键词矩阵拆查询（品类 4 词 × 角色 3 词 × Top 城市矩阵），不要指望一个大词抓全国。脚本内置限速（滚动 2-3 秒 + 查询间 5-9 秒），勿改快。v2 输出多一列 `query`（溯源：哪个词命中了谁，供「有效获客源」分析）。⚠️ Google Maps 不是"安装商专属"：搜批发商词命中的是「Solar energy equipment supplier」分类的批发商/设备供应商（2026-09 实测），批发商 + 安装商都是海量长尾，全都要铺。
 
+**CSV 另含 `maps_category`（Maps 类目原文）+ `customer_type`（类目→渠道角色映射）**——类目是 Google 自带的**渠道证据**，比事后靠公司名关键词猜渠道准得多（2026-09 前类目只塞在 `raw_text` 里、入库后丢失，导致全库 43% `customer_type` 为空、渠道档白丢 25 分）。解析走 `core.extract_maps_category` / `map_maps_category`，**与存量回填（`backfill_maps_category.py`）共用同一套逻辑**，避免线上抓取与历史回填两套口径漂移。
+
+> ⚠️ **类目标签随抓取界面语言变**：同一家企业在 `hl=en` 下是 `Solar energy equipment supplier`、`hl=ja` 下是「太陽エネルギー装置製造業者」（日文里 supplier 的写法），英/波/日界面混用时会同时存在于一批数据里（实证 triplesolar.co.uk / hdmsolar.co.uk / sunuser.co.uk / alternergy.co.uk）。映射表 `core.MAPS_CATEGORY_ROLE` 按语言**成对维护**；表外类目**留空交手工判**，**不做模糊关键词兜底**（否则 `Janitorial service` 会误命中 installer、`Dostawca węgla` 煤商会误命中 distributor）。**新开抓取语种前**先跑 `backfill_maps_category.py --show-unmapped` 看未映射类目分布再补表。
+
 ### 第四步：合并去重
 
 用 `scripts/merge_leads.py` 按官网域名去重合并（目录模式下文件名当城市标签）：
@@ -101,6 +105,14 @@ python scripts/backfill.py leads.csv --out backfill.json \
 ```bash
 python scripts/score_leads.py leads_final.json --out leads_scored.json
 ```
+
+⚠️ **手工判闸门（务必带上 `--require-judged`）**：三个手工判输入 `customer_type` / `product_tier` / `scale_tier`（口径见 `qualification-rules.md` 第六步）缺任一项，该项就只剩机械兜底（渠道按零售 0 / 规模按小型档 / 产品 0），**分数照样出得来但系统性偏低、且看不出异常**——2026-09 的教训就是 1199 家证据缺失全落 58 分基线无人察觉。脚本**每次都打完整度体检**；加 `--require-judged` 则齐全率低于 `--min-judged`（默认 80%）直接 exit 2 拒绝出分：
+
+```bash
+python scripts/score_leads.py leads_final.json --out leads_scored.json --require-judged
+```
+
+产物每条带 **`judge_gaps`** 字段（本条缺哪些手工判输入，如 `["product_tier","scale_tier"]`），据此挑出需要补判的条目。**顺带记住：`score` 是派生值** —— 任何证据字段回填之后旧分数即过期，必须跟一次重算（`scripts/rescore_companies.py`，或回填脚本带 `--rescore`）。
 
 评分口径、每维权重、打分标准、三态防幻觉规则**全部以 `references/qualification-rules.md` 为唯一来源**（SKILL.md 不重复具体数字，避免两处漂移）。A级 80-100 / B级 50-79 / C级 0-49。
 
@@ -199,6 +211,9 @@ python scripts/serve_report.py report.html
 - `scripts/list_scraper.py` — 列表页抓取脚本（品牌经销商名单 / 展会名录）
 - `scripts/merge_leads.py` — 多源 CSV 合并去重脚本
 - `scripts/backfill.py` — 批量背调脚本（抓官网提取邮箱/品牌）
+- `scripts/backfill_company_evidence.py` — 证据字段回填（按 `EVIDENCE_FIELDS` 白名单，只补空 + 落 diffs 审计）
+- `scripts/backfill_maps_category.py` — 存量回收 Google Maps 类目（从历史 CSV 的 `raw_text` 抽，**不重抓**）→ `maps_category` + `customer_type`，`--rescore` 同批重算
+- `scripts/rescore_companies.py` — 派生分重算（任何证据回填后必跑；`score` 是派生值，不重算就停在旧兜底值）
 - `scripts/render_report.py` — 线索 HTML 报告生成器（读 `leads_final.json` → 自包含 HTML）
 - `scripts/serve_report.py` — 本地 HTTP 服务器打开报告（解决 file:// 拦截外链）
 - `scripts/db.py` — SQLite 数据层（5 表 schema + MAIN_ID + 去重键，被 core/webapp 共用）

@@ -46,7 +46,7 @@ INT_FIELDS = {"scale_estimated", "backfilled", "sells_deye"}
 
 COMPANY_COLS = [
     "main_id", "domain", "name_key", "company_name", "country", "city",
-    "customer_type", "phone", "email", "linkedin", "facebook", "address",
+    "customer_type", "maps_category", "phone", "email", "linkedin", "facebook", "address",
     "website", "rating", "google_maps_url", "source_url", "profile_url",
     "brands_found", "brands_context", "product_tier", "scale_tier",
     "scale_estimated", "backfilled", "reason", "sells_deye", "score", "grade",
@@ -1299,6 +1299,205 @@ def get_send_exclude_set(db_path=None):
         "WHERE status='invalid' AND email IS NOT NULL AND email != ''")}
     conn.close()
     return s
+
+
+# ---------------------------------------------------------------------------
+# 证据回填（评分证据链修复，task_issues #14）
+# 背景：入库/补邮箱时只写了少数字段，背调 JSON 里完好的 brands_found / customer_type /
+# scale_tier 没进 companies，导致评分器渠道/规模/竞品增量三档大面积走兜底（58 分基线）。
+# 铁律：**只补空，绝不覆盖已有值**（已有值可能是人工判的更准），全部落 diffs 审计轨迹。
+# ---------------------------------------------------------------------------
+
+# 可回填的证据字段白名单：仅「抓取/背调的原始证据」TEXT 字段。
+# 禁 email（走 apply_email）/ pool（人工铁律）；也禁 sells_deye / product_tier /
+# score*（这些是 score_leads 的**派生结果**，回填后必须重算，不靠直接写）。
+# maps_category（Maps 类目原文）2026-09-22 加：与 customer_type（映射结果）分离，
+# 原文留存 → 映射表修订后可重跑，不必重抓。
+EVIDENCE_FIELDS = ("brands_found", "brands_context", "customer_type", "scale_tier",
+                   "maps_category")
+
+
+# ---------------------------------------------------------------------------
+# Google Maps 类目 -> 渠道角色（task_issues #14 item3「customer_type 源头修复」）
+#
+# 背景：Maps 结果卡片自带类目（div.W4Efsd 首块，"Solar energy equipment supplier ·
+# Górczewska 30"），此前 fetch_gmaps 只存 raw_text 未解析 —— 全库 896 家
+# customer_type 空，score_leads.classify_channel 兜底 retail（渠道档 0 分，-25 分）。
+#
+# 设计（两条铁律）：
+#   ① **原文与映射分列**：companies.maps_category 存类目**原文**（抓取证据，可复核），
+#      companies.customer_type 存映射后的角色。原文在 → 日后修订映射表可重跑。
+#   ② **白名单制，不做模糊关键词匹配**：下表逐条列出。模糊匹配会出事——
+#      "Janitorial service"(保洁) 命中 service 被当安装商、"Dostawca węgla"(煤炭
+#      供应商) 命中 supplier 被当分销商。表外一律 ""（未确认），交「手工判」环节，
+#      **不猜**（反幻觉铁律：判断不了标未确认）。
+#
+# 表依据：56 个历史 gmaps CSV / 7350 张卡片 / 205 个唯一类目逐条判定（前 30 个覆盖
+# 约 90% 记录）。表只覆盖已实证类目；新类目未命中时由脚本打印「未映射类目」提示补表。
+# ---------------------------------------------------------------------------
+
+MAPS_CATEGORY_ROLE = {
+    # —— 分销 / 批发 / 供货（渠道档满分）——
+    "Solar energy equipment supplier": "distributor",            # 1041 条
+    "Dostawca sprzętu do pozyskiwania energii słonecznej": "distributor",  # 1982 条
+    "Dostawca energii odnawialnej": "distributor",               # 1356 条
+    "Green energy supplier": "distributor",
+    "Energy supplier": "distributor",
+    "Dostawca energii": "distributor",
+    "Hurtownia": "distributor",                                  # 波兰语「批发」
+    "Hurtownia sprzętu elektrycznego": "distributor",
+    "Hurtowania urządzeń elektrycznych": "distributor",          # 上词的错拼变体
+    "Hurtownia baterii": "distributor",
+    "Wholesaler": "distributor",
+    "Battery wholesaler": "distributor",
+    "Electrical products wholesaler": "distributor",
+    "Electrical appliance wholesaler": "distributor",
+    "Electrical supply store": "distributor",                    # 电气器材贸易商（行业口径）
+    "Importer": "distributor",
+    "Firma importowo-eksportowa": "distributor",                 # 进出口公司
+    "Usługi dystrybucyjne": "distributor",                       # 分销服务
+    "Distribution service": "distributor",
+    "Dostawca słonecznych systemów grzewczych": "distributor",
+    "Dostawca urządzeń grzewczych": "distributor",
+    "Dostawca systemów klimatyzacji": "distributor",
+    "Dostawca sprzętu": "distributor",
+    "Heating equipment supplier": "distributor",
+    "Boiler supplier": "distributor",
+    "卸売業": "distributor",                                     # 日文「批发业」
+    "電気製品卸売業": "distributor",                              # 日文「电气产品批发业」
+    "配布業": "distributor",                                     # 日文「分销业」
+    # ⚠️ Google 类目标签**随抓取界面语言变**：同一家企业跑 hl=en 得 "Solar energy
+    # equipment supplier"、跑 hl=ja 得「太陽エネルギー装置製造業者」（直译「太阳能设备
+    # 制造业者」，实为 supplier 的日文写法）。实证：triplesolar.co.uk / hdmsolar.co.uk /
+    # sunuser.co.uk / alternergy.co.uk 等域名**同批并存两种写法**。
+    # → 故日文写法必须与英文同映射，否则同一企业因抓取语言不同被区别对待。
+    "太陽エネルギー装置製造業者": "distributor",
+    # 反向同理：「太陽光発電事業者」= "Solar energy company"（实证 solar4good.co.uk /
+    # titanenergyrenewables.com 并存），属**渠道角色模糊**类目，两种写法都**故意不映射**，
+    # 留空交手工判 —— 写在此处是标记「已判过，非漏项」。
+    "Solar energy company": "",
+    "太陽光発電事業者": "",
+    "Przedsiębiorstwo zajmujące się energią słoneczną": "",      # 上者的波兰语写法
+    # —— 安装 / 施工 / 运维（渠道档次高分）——
+    "Wykonawca instalacji grzewczych, klimatyzacyjnych i wentylacyjnych": "installer",  # 282 条
+    "Elektryk": "installer",                                     # 153 条
+    "Electrician": "installer",
+    "Inżynier elektryk": "installer",
+    "Serwis instalacji fotowoltaicznych": "installer",           # 光伏装置维保
+    "Serwis paneli fotowoltaicznych": "installer",
+    "Solar panel maintenance service": "installer",
+    "Solar energy system service": "installer",
+    "Instalacja klimatyzacji": "installer",
+    "Serwis klimatyzacji": "installer",
+    "Air conditioning contractor": "installer",
+    "HVAC contractor": "installer",
+    "Heating contractor": "installer",
+    "Zakładanie instalacji elektrycznych": "installer",          # 电气装置施工
+    "Electrical installation service": "installer",
+    "Wykonawca izolacji": "installer",                           # 保温施工（能效改造同场景）
+    "Insulation contractor": "installer",
+    "Electric vehicle charging station contractor": "installer",
+    "Hydraulik": "installer",
+    "Dekarz": "installer",                                       # 屋面工（光伏屋面常同一队）
+    # —— 明确零售（0 分档，写实值便于分析，不再留空）——
+    "Sklep z akumulatorami": "retail",
+    "Battery store": "retail",
+    "Sklep": "retail",
+    "Sklep firmowy": "retail",
+    "Sklep internetowy": "retail",
+    "Sprzedaż internetowa": "retail",                            # 线上销售
+    "Showroom": "retail",
+}
+
+# 评分行（类目紧跟其后）：英文 "4.7(123)" / 波兰语等逗号小数 "4,7(40)" / 无评分数
+MAPS_RATING_RE = re.compile(r"^\d[.,]\d(\(\d+\))?$")
+# 类目行尾是数字 → 其实是地址（"Cieszyńska 43" 这类缺类目的卡片），不是类目
+_ADDRESS_TAIL_RE = re.compile(r"\d[a-z]?$", re.IGNORECASE)
+
+
+def extract_maps_category(raw_text):
+    """从 Maps 卡片 raw_text 取类目**原文**；取不到返回 ""。
+
+    卡片形态（实测 en/pl 一致）：
+        公司名
+        公司名（重复一行）
+        4,7(40)                       <- 评分行
+        <类目> · <地址>                <- 取本行 '·' 前段
+        营业状态 · 电话
+    返回 "" 的三种情况：无评分行 / 评分行后无内容 / 该行其实是地址（无类目的卡片
+    第一行就是街址，如 "Cieszyńska 43"，尾token是数字，据此剔除）。
+    """
+    lines = [ln.strip() for ln in (raw_text or "").split("\n") if ln.strip()]
+    for i, ln in enumerate(lines):
+        if not (MAPS_RATING_RE.match(ln) or ln == "No reviews"):
+            continue
+        if i + 1 >= len(lines):
+            return ""
+        cand = lines[i + 1].split("·")[0].strip()
+        if not cand or _ADDRESS_TAIL_RE.search(cand):
+            return ""
+        return cand
+    return ""
+
+
+def map_maps_category(category):
+    """类目原文 -> 渠道角色（distributor/installer/retail）。
+
+    白名单制：表外返回 ""（未确认，交手工判环节），**不做模糊关键词兜底**。
+    """
+    return MAPS_CATEGORY_ROLE.get((category or "").strip(), "")
+
+
+def _evidence_empty(v):
+    """证据字段是否为空（'[]' / '{}' / 'null' / 空串都算空）。"""
+    if v is None:
+        return True
+    if isinstance(v, (list, dict)):
+        return len(v) == 0
+    if isinstance(v, int):
+        return False
+    s = str(v).strip()
+    return (not s) or s in ("[]", "{}", "null", "None", "0")
+
+
+def fill_company_evidence(main_id, fields, reviewer="自动(证据回填)", task_id="",
+                          db_path=None):
+    """把背调证据字段补进 companies —— **只补空字段**，每次写入落 diffs 审计。
+
+    fields: {字段名: 值}，仅白名单 EVIDENCE_FIELDS 生效；judged 值可为 list/dict/str。
+    返回 {"filled": {field: new}, "skipped": {field: 原因}}。
+    """
+    if not main_id:
+        return {"filled": {}, "skipped": {"_": "main_id 为空"}}
+    conn = init_db(db_path)
+    row = conn.execute("SELECT * FROM companies WHERE main_id=?", (main_id,)).fetchone()
+    if not row:
+        conn.close()
+        return {"filled": {}, "skipped": {"_": "企业不存在"}}
+    now = now_iso()
+    filled, skipped = {}, {}
+    for f, v in (fields or {}).items():
+        if f not in EVIDENCE_FIELDS:
+            skipped[f] = "非白名单字段"
+            continue
+        if _evidence_empty(v):
+            skipped[f] = "新值为空"
+            continue
+        if not _evidence_empty(row[f] if f in row.keys() else None):
+            skipped[f] = "DB 已有值（只补空不覆盖）"
+            continue
+        new = json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else str(v)
+        conn.execute(f"UPDATE companies SET {f}=?, updated_at=? WHERE main_id=?",
+                     (new, now, main_id))
+        conn.execute(
+            "INSERT INTO diffs (main_id, task_id, field, old_value, new_value, status, "
+            "detected_at, reviewer) VALUES (?,?,?,?,?,'approved',?,?)",
+            (main_id, task_id or "", f, str(row[f] if f in row.keys() else ""), new,
+             now, reviewer))
+        filled[f] = new
+    conn.commit()
+    conn.close()
+    return {"filled": filled, "skipped": skipped}
 
 
 # ---------------------------------------------------------------------------

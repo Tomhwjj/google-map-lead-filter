@@ -25,7 +25,8 @@ import time
 sys.path.insert(0, __file__.rsplit("\\", 1)[0] if "\\" in __file__ else "scripts")
 
 from backfill import CONTACT_PATHS, extract_emails, is_junk_email  # noqa: E402
-from core import get_invalid_email_set, init_db, now_iso  # noqa: E402
+from core import (fill_company_evidence, get_invalid_email_set,  # noqa: E402
+                  init_db, now_iso)
 from score_leads import score_lead  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
@@ -119,8 +120,14 @@ def scrape(page, website):
     return found
 
 
-def apply_email(db, lead, emails):
-    """写回 email + 重算分数 + diffs 审计轨迹。"""
+def apply_email(db, lead, emails, evidence=None):
+    """写回 email + 重算分数 + diffs 审计轨迹。
+
+    evidence（2026-09-22 Claude 加，task_issues #14）：背调证据字段 dict
+    {brands_found/brands_context/customer_type/scale_tier}，走 core.fill_company_evidence
+    **只补空**（不覆盖已有值，含 diffs 审计）。此前只写 email，背调证据全丢 —— 这是
+    1199 家 brands_found 空的根因。
+    """
     merged = ", ".join(dict.fromkeys(e.strip() for e in emails if e and e.strip()))
     ld = {
         "customer_type": lead.get("customer_type"),
@@ -154,6 +161,12 @@ def apply_email(db, lead, emails):
         (lead["main_id"], "", "email", old, merged, now, "WorkBuddy(官网补邮箱)"))
     conn.commit()
     conn.close()
+    # 证据字段只补空（在 email 连接关闭后单独走，避免同库两连接交错写）
+    if evidence:
+        fill_company_evidence(
+            lead["main_id"], evidence,
+            reviewer="WorkBuddy(存量补邮箱回填·证据字段)",
+            db_path=db)
     return merged, out
 
 

@@ -86,11 +86,15 @@ def rescore_and_update(db, lead, brands_found, dry_run=False):
         return out
     conn = sqlite3.connect(db)
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    # 2026-09-22 Claude 修（task_issues #14 同族 bug）：原 SET 里带
+    # `brands_context=?` 且传死值 "{}"，等于**每次重跑都把背调证据清空**——与
+    # record_email_review 覆盖 ai_analysis 是同一类「无关字段被顺手覆盖」的错误。
+    # 本函数的职责只有 brands_found + 派生分数，brands_context 不归它管，移出 SET。
     conn.execute(
-        "UPDATE companies SET brands_found=?, brands_context=?, sells_deye=?, score=?, grade=?, "
+        "UPDATE companies SET brands_found=?, sells_deye=?, score=?, grade=?, "
         "score_detail=?, score_basis=?, score_lt=?, grade_lt=?, score_detail_lt=?, "
         "score_basis_lt=?, reason=?, updated_at=? WHERE main_id=?",
-        (json.dumps(brands_found, ensure_ascii=False), "{}", int(out["sells_deye"]),
+        (json.dumps(brands_found, ensure_ascii=False), int(out["sells_deye"]),
          out["score"], out["grade"], json.dumps(out["score_detail"], ensure_ascii=False),
          json.dumps(out["score_basis"], ensure_ascii=False),
          out["score_lt"], out["grade_lt"], json.dumps(out["score_detail_lt"], ensure_ascii=False),

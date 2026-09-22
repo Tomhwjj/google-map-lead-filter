@@ -21,7 +21,8 @@ import sys
 
 sys.path.insert(0, __file__.rsplit("\\", 1)[0] if "\\" in __file__ else "scripts")
 
-from core import init_db, now_iso  # noqa: E402
+from core import (EVIDENCE_FIELDS, fill_company_evidence,  # noqa: E402
+                  init_db, now_iso)
 from rerun_emails import apply_email  # noqa: E402
 from rerun_emails import _TEMPLATE_DOMAINS, clean_email, rank_emails  # noqa: E402
 from backfill import is_junk_email  # noqa: E402
@@ -65,6 +66,44 @@ def main():
     companies = load_companies(args.db)
     inv = invalid_set(args.db)
 
+    # ---- 第一遍：证据字段回填（2026-09-22 加，task_issues #14 根因修复）----
+    # 独立于 email 路径：原逻辑「已有邮箱 → continue」把绝大多数企业的背调证据
+    # （brands_found/brands_context/customer_type/scale_tier）挡在库外 —— 这才是
+    # 1199 家 brands_found 空的真因。此遍对**每条记录**都走，只补空不覆盖。
+    n_ev_fill = n_ev_skip_empty = 0
+    ev_written = []
+    for rec in recs:
+        mid = (rec.get("main_id") or "").strip()
+        if not mid or mid not in companies:
+            continue
+        evidence = {k: rec.get(k) for k in EVIDENCE_FIELDS if rec.get(k)}
+        if not evidence:
+            n_ev_skip_empty += 1
+            continue
+        if args.apply:
+            r = fill_company_evidence(
+                mid, evidence, reviewer="WorkBuddy(存量背调证据回填)",
+                db_path=args.db)
+            if r["filled"]:
+                n_ev_fill += 1
+                ev_written.append(f"{mid} {companies[mid].get('company_name','')}: "
+                                  f"{list(r['filled'])}")
+        else:
+            n_ev_fill += 1
+            ev_written.append(f"[dry] {mid} {companies[mid].get('company_name','')}: "
+                              f"{list(evidence)}")
+    print(f"[证据回填] json={len(recs)} 有证据={n_ev_fill} 无证据={n_ev_skip_empty} "
+          f"apply={args.apply}")
+    for w in ev_written[:20]:
+        print("  ", w)
+    if len(ev_written) > 20:
+        print(f"   ... 共 {len(ev_written)} 条")
+
+    # 证据已回填，重载库内数据供第二遍评分用（brands 已进库，union 结果一致）
+    if args.apply:
+        companies = load_companies(args.db)
+
+    # ---- 第二遍：邮箱回填 ----
     n_match = n_skip_hasemail = n_skip_missing = n_nomail = n_write = 0
     written = []
     for rec in recs:

@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS companies (
     country         TEXT,
     city            TEXT,
     customer_type   TEXT,
+    maps_category   TEXT,
     phone           TEXT,
     email           TEXT,
     linkedin        TEXT,
@@ -288,6 +289,11 @@ def init_db(db_path=None):
     ccols = [r[1] for r in conn.execute("PRAGMA table_info(companies)")]
     if "scale_basis" not in ccols:
         conn.execute("ALTER TABLE companies ADD COLUMN scale_basis TEXT")
+    # 老库迁移：companies 补 maps_category 列（Google Maps 类目**原文**，抓取原始证据）
+    # 2026-09-22 加（Claude，task_issues #14 item3）：类目原文单独存，与映射结果
+    # customer_type 分开 —— 映射表日后修订可据此重跑，不必重抓。
+    if "maps_category" not in ccols:
+        conn.execute("ALTER TABLE companies ADD COLUMN maps_category TEXT")
     # 老库迁移：email_anomalies 补 email 列（无效邮箱地址；无邮箱异常该列为空）
     ecols = [r[1] for r in conn.execute("PRAGMA table_info(email_anomalies)")]
     if "email" not in ecols:

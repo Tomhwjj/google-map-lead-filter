@@ -34,7 +34,9 @@ from urllib.parse import urlparse
 OUT_FIELDS = ["company_name", "country", "city", "customer_type",
               "phone", "email", "website", "address", "profile_url",
               "source_url", "rating", "google_maps_url", "raw_text",
-              "query"]  # v2: fetch_gmaps 溯源列（哪个搜索词命中，供有效获客源分析）
+              "query",  # v2: fetch_gmaps 溯源列（哪个搜索词命中，供有效获客源分析）
+              "maps_category"]  # 2026-09-22: Maps 类目原文（证据；customer_type 的映射源）
+
 
 # 免费/公共邮箱域：邮箱后缀做「同公司」识别时排除，避免两家不同公司共用 gmail 误判
 FREE_EMAIL_DOMAINS = {
@@ -80,12 +82,13 @@ def normalize_phone(phone):
 
 
 def _make_rec(r, file_city):
-    """从源行生成完整 13 字段记录（city 源优先，缺则用文件名）。"""
+    """从源行生成完整 14 字段记录（city 源优先，缺则用文件名）。"""
     return {
         "company_name": (r.get("company_name") or "").strip(),
         "country": (r.get("country") or "").strip(),
         "city": (r.get("city") or "").strip() or file_city,
         "customer_type": (r.get("customer_type") or "").strip(),
+        "maps_category": (r.get("maps_category") or "").strip(),
         "phone": (r.get("phone") or "").strip(),
         "email": (r.get("email") or "").strip(),
         "website": (r.get("website") or "").strip(),

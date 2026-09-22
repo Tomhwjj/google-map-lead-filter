@@ -14,6 +14,7 @@
 
 用法:
     python score_leads.py leads.json --out leads_scored.json
+    python score_leads.py leads.json --out leads_scored.json --require-judged   # 硬闸门
 
 输入 JSON 每条字段：company_name, country, city, website, phone, email,
     linkedin, customer_type, brands_found, reason 等。
@@ -22,7 +23,14 @@
       - scale_estimated(bool)：背调过但经营痕迹不足 → 档位+「估」
       - backfilled(bool)：是否背调过。缺/未背调 → 未确认 → 中性分（按小型档，保守）
 输出：在输入基础上新增 sells_deye、score(头部)、grade(头部)、score_detail(头部)、
-    score_basis(头部)、score_lt(长尾)、grade_lt(长尾)、score_detail_lt(长尾)、score_basis_lt(长尾)。
+    score_basis(头部)、score_lt(长尾)、grade_lt(长尾)、score_detail_lt(长尾)、score_basis_lt(长尾)、
+    judge_gaps(本条缺哪些手工判输入)。
+
+⚠️ 手工判闸门（2026-09-22 加，task_issues #14 item4）：
+    三个手工判输入 customer_type / product_tier / scale_tier 缺任一项，该项就只剩机械
+    兜底（渠道按零售 0 / 规模按小型档 / 产品 0），分数照样出得来但系统性偏低。**每次都打
+    完整度体检**；加 --require-judged 则齐全率低于 --min-judged（默认 80%）直接 exit 2
+    拒绝出分 —— 用来堵住「跳过手工判那一步直接出分」。
 """
 import argparse
 import json
@@ -206,19 +214,77 @@ def score_lead(lead):
     }
 
 
+# 三个**手工判**输入（qualification-rules.md）：缺了就只剩机械兜底，
+# 分数会系统性偏低且看不出异常（2026-09 教训：1199 家证据缺失，全落 58 分基线兜底，
+# 无人察觉）。这组完整度检查就是在堵这个洞。
+JUDGE_INPUTS = ("customer_type", "product_tier", "scale_tier")
+
+
+def _filled(lead, field):
+    """该输入是否已判：非空即算。转 str 再判，容错非字符串输入。"""
+    return bool(str(lead.get(field) or "").strip())
+
+
+def judge_gaps(lead):
+    """本条的「手工判缺口」：三输入里哪些还是空的。空列表 = 证据齐。"""
+    return [f for f in JUDGE_INPUTS if not _filled(lead, f)]
+
+
+def judge_report(leads):
+    """证据完整度统计：每输入的填充率 + 三输入有缺口的条数。"""
+    n = len(leads) or 1
+    rep = {}
+    for f in JUDGE_INPUTS:
+        filled = sum(1 for l in leads if _filled(l, f))
+        rep[f] = (filled, n, filled / n)
+    gaps = [l for l in leads if judge_gaps(l)]
+    return rep, len(gaps)
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # abort 提示别在 GBK 终端成乱码
     ap = argparse.ArgumentParser(description="计算头部/长尾两套评分")
     ap.add_argument("json", help="已背调的线索 JSON")
     ap.add_argument("--out", default="leads_scored.json", help="输出 JSON")
+    # --require-tiers 是 WorkBuddy 工单里用的名字，保留为别名，免对接时 flag 对不上
+    ap.add_argument("--require-judged", "--require-tiers", dest="require_judged",
+                    action="store_true",
+                    help="硬闸门：三输入齐全率低于 --min-judged 就拒绝出分（exit 2）")
+    ap.add_argument("--min-judged", type=float, default=0.8,
+                    help="硬闸门阈值（默认 0.8，即至少 80%% 的线索三个手工判输入齐全）")
     args = ap.parse_args()
 
     with open(args.json, encoding="utf-8") as f:
         leads = json.load(f)
 
+    # ---- 证据完整度体检（每次都打，先于评分）----
+    # 为什么要先打：分数是算出来的，**输入缺证据时分数照样出得来**，
+    # 只是悄悄走兜底 —— 不体检就等于默认「手工判那一步已经做过了」。
+    rep, n_gap = judge_report(leads)
+    n_full = len(leads) - n_gap
+    rate_full = n_full / (len(leads) or 1)
+    print(f"证据完整度（{len(leads)} 条）:", flush=True)
+    for f in JUDGE_INPUTS:
+        filled, tot, rate = rep[f]
+        flag = "OK" if rate >= args.min_judged else "⚠️ 偏低"
+        print(f"  {f:14} {filled:5}/{tot:<5} {rate:6.1%}  {flag}", flush=True)
+    print(f"  三输入齐全 {n_full} 条 / 有缺口 {n_gap} 条（{rate_full:.1%}）", flush=True)
+    if n_gap:
+        print("  → 缺证据的条目评分会走兜底（渠道按零售 0 分 / 规模按小型档 / 产品 0 分），"
+              "补证据见 qualification-rules.md 第六步", flush=True)
+    if args.require_judged and rate_full < args.min_judged:
+        # abort 走 stderr；上面已 flush，保证终端里顺序是「体检 → abort」
+        print(f"\n[abort] 三输入齐全率 {rate_full:.1%} 低于阈值 {args.min_judged:.0%}，拒绝出分。"
+              f"先补 customer_type/product_tier/scale_tier，或加 --min-judged 放宽。",
+              file=sys.stderr)
+        sys.exit(2)
+
     for l in leads:
         r = score_lead(l)
         l.update(r)
+        # 把缺口写进结果：下游（报告/入库）能看出这条分数建立在多少兜底上
+        l["judge_gaps"] = judge_gaps(l)
 
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(leads, f, ensure_ascii=False, indent=1)

@@ -13,12 +13,34 @@
 - [x] ~~**客户池模块**（第二阶段）~~：五分类操作 UI（`/pool` 总览 + 企业详情 + 行内换池）+ `pool_log` 轨迹时间戳，已落地并验证
 - [x] ~~**市调模块**（第三阶段）~~：热度 0-100 研判录入 + 市场洞察复盘报告 + 缓存 7 天过期，已落地并验证
 - [x] ~~**重跑 282 家 brands_found 空候选**~~：dry-run 15 家验证修复有效（Greto/Grodno/TIM 3 家命中 Deye 卖家，之前全漏判）但 10 家 timeout（反爬/慢站）→ **用户决定不跑全量，改按需单家修**
+- [ ] **手工判补 `product_tier` / `scale_tier`（下一轮真瓶颈，2026-09-22 定的）**：这两项**没有机械来源**，只能 Claude 读官网 body / LLM 判。现状 `product_tier` 空 2095（99.5%）、`scale_tier` 空 1780（84.6%）；`product_tier` 99.5% 空 × `brands_found` 87.3% 空 ⇒ 产品分几乎全落 0。补判后**必须跟一次 `rescore_companies.py`**（或回填脚本带 `--rescore`）。
+- [ ] **等 WorkBuddy 回 523 家矛盾判例**：`data/acq_work/maps_category_conflicts.csv`（类目说 distributor、库内写 installer，505/523 是这类）。请其按 domain 抽查 20-30 家定判例，判例定了我批量改，不逐条审。
+- [ ] **请 WorkBuddy 复核 `brands_context` 假填满影响面**：库内真内容仅 266/2105，其余 1839 是占位 `{}`。其一，其 `wb_data_health_check.py` 需把 `'{}'`/`'[]'` 计入空值口径；其二，skill12/13/14 那批若被 `rerun_brands` 洗过，证据要从历史 JSON 重新回填（issue #15）。
+- [ ] **DE 两僵尸任务清理**（T20260904225744 / T20260905125956）：`tasks` 表归 Claude，直接 `UPDATE tasks SET status=…` 结掉（已与 WorkBuddy 约定，未执行）。
+- [ ] **`--require-judged` 改默认开**：等 WorkBuddy 确认把该 flag 加进 A 管线重评分调用后，改成默认开（届时不加 `--allow-unjudged` 出不了分）。
 - [ ] **WorkBuddy 侧 1a/1b/1c 落地**：`email_pipeline_wb.py` 改 `RE_TICKET` 扩展（扫 subject + 多语言工单措辞 + zendesk/freshdesk 发件识别）+ `_hit_r5` 兜底 no_action + `sub_label` 子类型写入（out_of_office/ticket_ack/system_notification），改完 dry-run 冒烟；改时 19:00（提案 0）
 - [ ] **三模块联调 + 真实数据全流程**：市调定国家 → 获客入库 → 客户池跟进，用真实数据端到端跑一遍
 - [ ] **Volt Polska 换池到黑名单**：已定性同行生产商（task_issues #12），需人工在 UI 换池（潜在客户(未联系) → 黑名单客户，备注「同行/自有品牌生产商」）。skill3 组里它的 3 个邮箱是否一并处理待定
 - [ ] **own_brand 自动检测（根治方案，提疑不定性，暂缓）**：让脚本拦住漏判但不误杀。① `backfill.py` 对 `brands_found` 空的公司，额外提取**生产商措辞**信号（producent / produkujemy / produkcja / manufacturer / we produce / hersteller / produktion，**绝不用**产品词 inwerter/magazyn/falownik——渠道也写），存字段 `own_brand_signal`；② `score_leads.py` 命中信号 → 输出 `own_brand_suspect=true`，**只在评分依据提示「疑似同行生产商需人工复核」，不自动降级/不改渠道分/不归黑名单**；③ 定性永远靠 Claude 读 body：producent=同行杀 / hurtownia=dystrybucja=渠道留。⚠️ 动机：brands_found 空≠own_brand（德国批发商品牌列表 JS/图片抓不到但真卖竞品，见 qualification-rules.md「品牌名抓不到≠不卖竞品」那条），硬判必误杀，故只提疑不定性。
 
 ## 改动记录（按日倒序）
+
+- **2026-09-22（task_issues #14 评分证据链系统性修复，item1-5 全部完成，结题）**：
+  - **根因**：`ingest_backfill_wb.py` 只写 `companies.email`，历史背调 JSON 里完好的 `brands_found` / `brands_context` / `customer_type` / `scale_tier` 全丢 → 评分器兜底（渠道零售 0 / 规模小型 8）→ Deye 存量卖家系统性压到 58 基线。
+  - **item1 证据链修复**：`db.py` 加 `maps_category` 列（含老库 ALTER 迁移）；`core.EVIDENCE_FIELDS` 扩为 5 项白名单；新增 `scripts/backfill_company_evidence.py` 通用回填（只补空 + diffs 审计）。
+  - **item2 历史 JSON 回填**：实得 **109 `brands_found` / 149 `brands_context` / 0 `customer_type`** —— 比 WorkBuddy「可修复大部分 1199 家」的预估**低一个数量级**，因为那 6 个历史 JSON 里大多数记录本身就是空的（**不是入库丢的，是当时就没抓到**）。`brands_found` 空 1946→1837（仍 87.3%），要靠重跑品牌背调（#13 线）才能补。
+  - **item3 customer_type 源头修复**：① `fetch_gmaps.py` 抓取时解析 Maps 卡片类目 → `maps_category`（**原文**）+ `customer_type`（映射结果）；② 新增 `scripts/backfill_maps_category.py` 做存量回收——**从历史 CSV 的 `raw_text` 抽类目，不重抓**。实得：`maps_category` 补 1811 家、`customer_type` 补 1437 家，存空值 896→**354（16.8%）**，diffs 审计 2353 条。
+    - 解析逻辑 `core.extract_maps_category` / `map_maps_category` **线上抓取与历史回填共用同一套**，避免两套口径漂移。
+    - **白名单制，不做模糊关键词兜底**：`Janitorial service` 会误命中 installer、`Dostawca węgla`（煤商）会误命中 distributor，两类实测真在数据里。表外类目留空交手工判。
+    - **⚠️ 重要发现：Google Maps 类目标签随「抓取界面语言」变**。同一域名在**同一批**数据里并存 `Solar energy equipment supplier`（hl=en）与「太陽エネルギー装置製造業者」（hl=ja，日文里 supplier 的写法）。实证 triplesolar.co.uk / hdmsolar.co.uk / sunuser.co.uk / alternergy.co.uk。单语映射表会整批漏判且看不出异常 → 表按语言成对维护；跨语言同义的「渠道角色模糊」类目（`Solar energy company` / 太陽光発電事業者）**显式写空值**标记「已判过、非漏项」。落库 issue #16。
+    - **523 家矛盾**（类目映射 vs 库内现值，505 家 installer→distributor）：**不覆盖**（库里可能是人工判的更准）、**不静默丢** → 导 `data/acq_work/maps_category_conflicts.csv` 供人工定判例。**故意不进 UI 差异队列**（一次灌 523 条会冲垮刚压到 ~25 条的待审队列）。
+  - **item4 手工判硬闸门**：`score_leads.py` 加 `--require-judged`（别名 `--require-tiers`，按 WorkBuddy 工单命名）——三输入齐全率 < `--min-judged`（默认 80%）则 **exit 2 拒绝出分**；**每次运行都打完整度体检**（默认只告警，向后兼容不砸现有管线，WorkBuddy 确认后改默认开）；产物新增 `judge_gaps` 字段标记本条缺哪些手工判输入。
+  - **item5 同批重算**：新增 `scripts/rescore_companies.py` —— 通用派生分重算工具（`--mains` / `--reviewer-like` / `--all`，默认 dry）。此前仓库没有通用工具，每轮临时写一次性脚本、写完就丢，于是「回填了但没重算」反复发生。落库 issue #17。`backfill_maps_category.py --rescore` 重算 1811 家 → **等级变化 418 家**（典型：波兰语 `Hurtownia` 批发商 C(28)→B(53)，渠道档白丢的 25 分回来了）。
+  - **修 1 个 WorkBuddy 未发现的 bug（issue #15）**：`rerun_brands.py` 的 UPDATE SET 里带 `brands_context=?` 传死值 `"{}"`，**每跑一次就把背调上下文证据清空**——与 `record_email_review` 覆盖 `ai_analysis` 同一类「无关字段被顺手覆盖」。已移出 SET。⚠️ 副作用待查：库内 `brands_context` 非空但真内容只有 **266/2105**，其余 1839 个是占位 `{}`（有多少是本 bug 造的、多少是入库就没写，无写前快照分不出来）。
+  - **尚未解决（下一轮真瓶颈）**：三个手工判输入里最空的两个**没有机械来源**——`product_tier` 空 **2095（99.5%）**、`scale_tier` 空 **1780（84.6%）**（历史 JSON 里 `scale_tier` 一个值都没有）。只能 Claude 读 body/LLM 判，不是回填能解的。`product_tier` 99.5% 空 × `brands_found` 87.3% 空 → 产品分几乎全落 0。
+  - **纪律核验**：全部走 `fill_company_evidence`（只补空 + diffs 审计），**未碰 pool**（池分布未变 2095/4/3/2/1）；写前备份 `leads.db.bak_20260922_claude_{evidence_fix,maps_category}`；幂等性已验（重跑 dry 报 `[待补] 0 家`）。
+  - **落库**：#14 结题（detail/solution 补齐）+ 新增 #15（无关字段被覆盖族）/ #16（类目语言依赖）/ #17（派生分无通用重算工具）。
+  - **对接**：`对接-workbuddy.md` 已写第②轮复核回复，含 4 处需其修正认知的地方（预估高一个数量级 / `brands_context` 假填满 / rerun_brands 清空 bug 待其复核影响面 / 类目语言依赖）+ 契约变更（新增 `maps_category` 列、`EVIDENCE_FIELDS` 5 项、`judge_gaps` 字段、建议管线加 `--require-judged`）。
 
 - **2026-09-14（Claude Code 把关复核 + 全量 commit）**：
   - **把关**：逐项复核 WorkBuddy 09-12→09-14 全部改动（db.py/spec.json/core.py/backfill.py/email_pipeline_wb.py/runner.py/merge_leads.py/render_research_report.py/webapp/app.py + 8 个新增脚本）。结论：质量高、未破换池铁律、无越权 ALTER/DROP、无裸 SQL 注入。
