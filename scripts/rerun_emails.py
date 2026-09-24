@@ -16,6 +16,7 @@
 """
 import argparse
 import json
+import os
 import random
 import re
 import sqlite3
@@ -29,6 +30,10 @@ from core import (fill_company_evidence, get_invalid_email_set,  # noqa: E402
                   init_db, now_iso)
 from score_leads import score_lead  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
+
+# 库路径跟随仓库根（同 db.py），别硬编码 D:\Agent\...（2026-09-24 改进 #2）
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_DB = os.path.join(_PROJECT_ROOT, "data", "leads.db")
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
@@ -173,11 +178,11 @@ def apply_email(db, lead, emails, evidence=None):
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description="补邮箱：重抓官网联系页写回 companies.email")
-    ap.add_argument("--db", default=r"D:\Agent\git\google-map-lead-filter\data\leads.db")
+    ap.add_argument("--db", default=DEFAULT_DB)
     ap.add_argument("--main-id", default="", help="只处理指定企业")
     ap.add_argument("--apply", action="store_true", help="写库（默认 dry 只打印）")
     ap.add_argument("--from-json", default="", help="从已抓 JSON 直接 apply（不重抓）")
-    ap.add_argument("--out", default="data/email_backfill_wb.json")
+    ap.add_argument("--out", default=os.path.join(_PROJECT_ROOT, "data", "email_backfill_wb.json"))
     args = ap.parse_args()
 
     if args.from_json:

@@ -17,6 +17,7 @@ import json
 import random
 import re
 import sqlite3
+import os
 import sys
 import time
 
@@ -26,7 +27,10 @@ from backfill import extract_product_links, find_brands  # noqa: E402
 from score_leads import score_lead  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
-DEFAULT_DB = r"D:\Agent\git\google-map-lead-filter\data\leads.db"
+# 库路径跟随仓库根（同 db.py），别硬编码 D:\Agent\...——换机器/目录跑错，
+# 且从别处跑会静默直写共有库（2026-09-24 改进 #2）
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_DB = os.path.join(_PROJECT_ROOT, "data", "leads.db")
 
 # 品牌清单（与入库时一致）：我方 Deye+贴牌 / 竞品
 DEYE_BRANDS = "Deye,Sunsynk,Sol-Ark,INGE,Fusion,OHm,Noark"

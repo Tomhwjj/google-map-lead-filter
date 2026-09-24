@@ -97,11 +97,14 @@ def sells_deye(brands):
 
 
 def product_score(lead):
-    """产品匹配 30：手工判 product_tier 优先 > 机械 brands_found。
+    """产品匹配 30：手工判 product_tier 优先 > 机械 brands_found > 品类词兜底。
 
     product_tier（Claude 读 body/兜底手工判，覆盖机械判断，见 qualification-rules.md）：
       "deye"=存量30 / "competitor"=卖竞品/光伏品类24 / "none"=不相关0；缺省用 brands_found。
-    机械兜底：brands_found 命中 Deye/贴牌=30 > 命中竞品=24 > 空=0。
+    机械兜底：brands_found 命中 Deye/贴牌=30 > 命中竞品=24 > 空但 body 自述卖品类=24 > 空=0。
+    品类词兜底（2026-09-24 第 2 步）：brands_found 空 ≠ 无产品证据——body 明写
+    falownik/magazyn energii/wechselrichter 的是品类渠道（增量 24），与「真无证据」分开
+    （口径 qualification-rules.md L47/L59，断点 3 修的就是「没查到」和「确实没有」混成同一个 0）。
     """
     tier = lead.get("product_tier")
     if tier == "deye":
@@ -114,6 +117,8 @@ def product_score(lead):
     if sells_deye(brands):
         return 30
     if brands:
+        return 24
+    if lead.get("category_hits"):
         return 24
     return 0
 
@@ -132,6 +137,8 @@ def product_basis(lead):
         return "已卖Deye·存量"
     if brands:
         return "卖竞品·增量"
+    if lead.get("category_hits"):
+        return "卖光伏/储能品类·增量（body 自述）"
     return "无逆变器/储能证据"
 
 
@@ -174,6 +181,38 @@ def scale_score(tier, table):
     return table[tier if tier in table else "small"]
 
 
+def evidence_source(lead):
+    """每个维度的证据来源：judged（判出来的）/ mechanical（规则命中）/ fallback（缺值走兜底）。
+
+    为什么要有这一层：分数算出来之后，「这一分是有依据的，还是兜底给的」在产物里
+    看不出来 —— 兜底分和真判分长得一模一样。task_issues #14 那 1199 家落 58 分基线
+    无人察觉，差的就是这一层标注。（2026-09-22 收编进正式流程，提案见 对接-workbuddy.md）
+    """
+    src = {}
+    if lead.get("product_tier") in ("deye", "competitor", "none"):
+        src["产品匹配"] = "judged"
+    elif (lead.get("brands_found") or []):
+        src["产品匹配"] = "mechanical"
+    elif lead.get("category_hits"):
+        # 品类词自述（body 明写卖光伏/储能）= 弱于品牌命中、但非兜底（2026-09-24 第 2 步）
+        src["产品匹配"] = "mechanical"
+    else:
+        src["产品匹配"] = "fallback"
+    src["渠道"] = "mechanical" if str(lead.get("customer_type") or "").strip() else "fallback"
+    src["规模"] = "judged" if (str(lead.get("scale_tier") or "").lower() in SCALE_LABEL) else "fallback"
+    # 触达：三样全空才算兜底；「仅官网」是一次真实观测，不算兜底
+    if contact_tier(bool(lead.get("phone")), bool(lead.get("email")), bool(lead.get("website"))) == "none":
+        src["触达"] = "fallback"
+    else:
+        src["触达"] = "mechanical"
+    return src
+
+
+def fallback_dims(lead):
+    """本条哪几个维度的分是兜底给的（空列表 = 四维都有真实来源）。"""
+    return [k for k, v in evidence_source(lead).items() if v == "fallback"]
+
+
 def score_lead(lead):
     phone = bool((lead.get("phone") or "").strip())
     email = bool((lead.get("email") or "").strip())
@@ -211,6 +250,9 @@ def score_lead(lead):
         "score": score_h, "grade": grade_of(score_h), "score_detail": detail_h, "score_basis": basis_h,
         "score_lt": score_t, "grade_lt": grade_of(score_t), "score_detail_lt": detail_t, "score_basis_lt": basis_t,
         "reason": dev_reason(grade_of(score_h), basis_h),
+        # 证据来源标注（新增）：让「兜底分」在产物里可辨，不再与真判分同形
+        "evidence_source": evidence_source(lead),
+        "fallback_dims": fallback_dims(lead),
     }
 
 
@@ -297,6 +339,15 @@ def main():
     print(f"  头部模式分级: {dict(g_head)}")
     print(f"  长尾模式分级: {dict(g_tail)}")
     print(f"  卖 Deye: {deye_n} 家")
+    # 兜底显形（新增）：有兜底的条数 + 兜在哪个维度。以前这一层是隐形的，
+    # 全批走兜底也照样报「评分完成」，这正是 #14 能瞒住 1199 家的原因。
+    fb_rows = [x for x in leads if x.get("fallback_dims")]
+    fb_counts = Counter(d for x in fb_rows for d in x["fallback_dims"])
+    print(f"  ⚠️ 含兜底维度的条目: {len(fb_rows)}/{len(leads)}（{len(fb_rows)/ (len(leads) or 1):.1%}）"
+          f" · 分布 {dict(fb_counts)}")
+    if fb_rows:
+        print("     → 兜底 = 该维度没有证据、按保守默认值给分（不是判出来的）。"
+              "补证据见 evidence_gate.py 出的工作单。")
 
 
 if __name__ == "__main__":

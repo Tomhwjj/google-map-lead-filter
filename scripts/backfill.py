@@ -33,7 +33,25 @@ CONTACT_PATHS = ["contact", "kontakt", "impressum", "bok", "about", "about-us",
 # ⚠️ 仅作兜底：硬编码英文/德语路径对波兰语等 WooCommerce 站（如 /kategoria/.../falowniki/）全部 404，
 #   导致竞品品牌漏判（2026-09-11 Oze-Ekoshop 教训）。主路径改为「从首页自动提取产品分类链接」。
 BRAND_PATHS = ["brands", "products", "inverters", "battery-storage", "batteries",
-               "manufacturers", "marken", "hersteller", "produkte"]
+               "manufacturers", "marken", "hersteller", "produkte",
+               # 波兰语（主力市场）WooCommerce 常见产品/分类路径（2026-09-24 补，
+               # 此前硬编码英/德对波兰语站全 404，见 task_issues #16 / 对接文归因断点 2）
+               "produkty", "kategoria", "falowniki", "magazyn-energii", "sklep",
+               "falownik", "magazyny-energii", "panele-fotowoltaiczne"]
+
+# 品类词兜底（2026-09-24，第 2 步）：品牌名抓不到时，认品类不认品牌。
+# body 自述卖光伏/储能/逆变器 = 品类渠道（增量 24），口径 qualification-rules.md L47/L59。
+# 与「真无产品证据」区分开——后者才是 0 分兜底（断点 3 修的就是这个「混成同一个 0」）。
+CATEGORY_KW = [
+    # 逆变器（多语言）
+    "falownik", "inwerter", "inverter", "wechselrichter",
+    # 储能 / 电池
+    "magazyn energii", "magazyn", "akumul", "battery", "storage", "speicher",
+    # 光伏
+    "fotowoltaik", "photovoltaic", "photovoltaik", "solar", "panele fotowoltaiczne",
+    # 混合 / 并网
+    "hybryd", "hybrid",
+]
 
 # 多语言产品/品牌链接关键词（自动提取分类链接用，避免语言硬编码）
 LINK_PRODUCT_KW = [
@@ -150,6 +168,25 @@ def find_brands(text, brands):
     return found
 
 
+def find_categories(text):
+    """检测正文是否自述光伏/储能/逆变器品类，返回命中词列表。
+
+    与 find_brands 并列的「品类证据」来源：brands_found 空 ≠ 无产品证据——
+    body 明写 falownik / magazyn energii / wechselrichter 的是品类渠道（增量 24），
+    与「真无产品证据」（0 分兜底）要分开。单词用词边界（防 inverter⊂converter 误命中），
+    多词短语直接子串匹配。
+    """
+    low = text.lower()
+    hits = []
+    for kw in CATEGORY_KW:
+        if " " in kw:
+            if kw in low:
+                hits.append(kw)
+        elif re.search(r"(?<![a-z0-9])" + re.escape(kw) + r"(?![a-z0-9])", low):
+            hits.append(kw)
+    return hits
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -181,9 +218,15 @@ def main():
     ap.add_argument("--max", type=int, default=0, help="最多背调条数 (0=全部)")
     ap.add_argument("--brands", default="", help="品牌列表（我方+贴牌+竞品），逗号分隔，如 'Deye,Sungrow,Huawei'")
     ap.add_argument("--deye", default="", help="我方品牌（含贴牌），逗号分隔。品牌页抓到命中这些为止（命中竞品不算，继续找 Deye）")
-    ap.add_argument("--fast", action="store_true", help="快速模式：只抓首页+品牌页找品牌，跳过 contact 页")
+    ap.add_argument("--fast", action="store_true", help="快速模式：只抓首页+品牌页找品牌，跳过 contact 页。⚠️仅限测试，正式跑会系统性丢证据")
     ap.add_argument("--goto-timeout", type=int, default=35000, help="首页 goto 超时毫秒（2026-09-20 起默认 35000；20s 时代超时偏紧损失大量慢站）")
     args = ap.parse_args()
+    if args.fast:
+        # 改进 #5（2026-09-24）：--fast 曾被当「加速开关」误用，09-12 批 1516 家
+        # 「拿到正文 4%」就是它的代价（跳 contact 页 + 品牌页只抓 2 个 + 配额减半）。
+        # 不拒绝（测试/调试场景要它），但必须醒目警告，让「证据系统性缺失」不再无声。
+        print("\n⚠️  --fast 仅限测试：跳过 contact 页、品牌页只抓 2 个、正文配额减半，"
+              "正式获客会系统性丢邮箱/品牌证据。正式跑请去掉 --fast。\n", flush=True)
     brands = [b.strip() for b in (args.brands or "").split(",") if b.strip()]
     deye_brands = {b.strip().lower() for b in (args.deye or "").split(",") if b.strip()}
 
@@ -199,8 +242,15 @@ def main():
             import ctypes
             h = ctypes.windll.kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
             if h:
-                ctypes.windll.kernel32.CloseHandle(h)
-                return True
+                try:
+                    # 2026-09-22 WorkBuddy 修：OpenProcess 成功 ≠ 进程活着——
+                    # 进程句柄被第三方持有（父进程/宿主）会延缓进程对象回收，
+                    # 必须再查终止状态（WaitForSingleObject(0)=0 即已终止）。
+                    # 实测：TaskStop/硬杀后死 PID 被 OpenProcess 打开成功，
+                    # 旧逻辑误判"活着"导致锁永不清理、续跑被挡。
+                    return ctypes.windll.kernel32.WaitForSingleObject(h, 0) != 0
+                finally:
+                    ctypes.windll.kernel32.CloseHandle(h)
             return False
         except Exception:
             return True  # 判不了就保守当活着
@@ -293,11 +343,13 @@ def main():
                 "emails": [],
                 "brands_found": [],
                 "brands_context": {},
+                "category_hits": [],  # 品类词命中（2026-09-24 第 2 步）：body 自述卖光伏/储能/逆变器
                 "body": "",
                 "error": "",
             })
             if website.startswith("http"):
-                texts = []
+                texts = []          # 公司信息正文（首页 + 联系页）
+                product_texts = []  # 产品页正文（品牌证据主来源，2026-09-24 单列，别再混进 texts 被联系页挤占配额）
                 home_html = ""  # 首页原始 HTML，供品牌链接自动提取（不落库）
                 try:
                     page.goto(website, timeout=args.goto_timeout, wait_until="domcontentloaded")
@@ -326,7 +378,9 @@ def main():
                         time.sleep(random.uniform(1, 2))
                         c = page.content()
                         rec["emails"] = sorted(set(rec["emails"] + extract_emails(c)))
-                        texts.append((page.inner_text("body") or "")[:3000])
+                        # 联系页正文只留 1500：其唯一价值是邮箱（品牌证据主来源在产品页），
+                        # 别让它挤占 body 配额（2026-09-24，归因断点 2）
+                        texts.append((page.inner_text("body") or "")[:1500])
                     except Exception:
                         pass
 
@@ -345,26 +399,38 @@ def main():
 
                 if brands and should_keep_going():
                     # 品牌页来源：优先从首页自动提取产品分类链接（多语言通用，根治
-                    # 波兰语 WooCommerce 站漏判），提取不到回退硬编码英文/德语路径兜底。
+                    # 波兰语 WooCommerce 站漏判），提取不到回退硬编码路径兜底（已补波兰语）。
                     product_links = extract_product_links(home_html, website)
                     brand_urls = product_links or [
                         website.rstrip("/") + "/" + p for p in brand_paths]
-                    for url in brand_urls[:6]:  # 最多抓 6 个品牌页，控制耗时
+                    for url in brand_urls[:12]:  # 最多抓 12 个产品页（2026-09-24 6→12：产品证据主来源，别在取证上抠时间）
                         if not should_keep_going():
                             break
                         try:
-                            page.goto(url, timeout=10000, wait_until="domcontentloaded")
+                            try:
+                                page.goto(url, timeout=20000, wait_until="domcontentloaded")
+                            except Exception:
+                                # 产品页是品牌证据主来源，超时重试一次（10s 偏紧损失慢站，归因断点 2）
+                                page.goto(url, timeout=20000, wait_until="domcontentloaded")
                             try:
                                 page.wait_for_load_state("networkidle", timeout=4000)
                             except Exception:
                                 pass
                             time.sleep(random.uniform(0.3, 0.6))
-                            texts.append((page.inner_text("body") or "")[:3000])
-                            brand_ctx = find_brands(" ".join(texts), brands)
+                            product_texts.append((page.inner_text("body") or "")[:3000])
+                            # 品牌判断吃「产品页 + 公司信息」全部正文，产品页优先
+                            brand_ctx = find_brands(" ".join(product_texts + texts), brands)
                             rec["brands_found"] = list(brand_ctx.keys())
                             rec["brands_context"] = brand_ctx
                         except Exception:
                             pass
+
+                # 产品页正文并回 body（产品优先）+ 品类词检测（2026-09-24，归因断点 1）
+                # 原先 body 在品牌页循环前就冻结，产品页正文从不写回 → 判档/闸门拿到的
+                # 正文永远缺产品信号（941 家 90.6% 无产品证据的根因之一）。
+                # body 产品优先组装，配额 8000→24000，容纳约 12 个产品页。
+                rec["body"] = (" ".join(product_texts + texts))[:24000]
+                rec["category_hits"] = find_categories(rec["body"]) if rec["body"] else []
             else:
                 rec["error"] = "no website"
 

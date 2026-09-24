@@ -32,9 +32,19 @@ def main():
         return round(n * 100 / total, 1) if total else 0
 
     # 1. 关键字段空值率（证据完整性）
+    # 工单5（Claude 2026-09-22）：统一空值口径——NULL/空串/'[]'/'{}' 占位一律算空，
+    # 否则 brands_context 这类「假填满」字段（87.4% 是 '{}'）永远不告警。
+    # 并把 product_tier / scale_tier / maps_category / brands_context 纳入巡检。
+    def empty_cond(col):
+        return f"{col} IS NULL OR TRIM({col})='' OR TRIM({col})='[]' OR TRIM({col})='{{}}'"
+
     checks = [
-        ("brands_found 空", "brands_found IS NULL OR brands_found IN ('','[]')", 40),
-        ("customer_type 空", "customer_type IS NULL OR customer_type=''", 60),
+        ("brands_found 空", empty_cond("brands_found"), 40),
+        ("brands_context 空(含{}占位)", empty_cond("brands_context"), 40),
+        ("customer_type 空", empty_cond("customer_type"), 60),
+        ("product_tier 空", empty_cond("product_tier"), 80),
+        ("scale_tier 空", empty_cond("scale_tier"), 80),
+        ("maps_category 空", empty_cond("maps_category"), 60),
         ("email 空", "email IS NULL OR email=''", 35),
     ]
     backfilled = q("SELECT COUNT(*) FROM companies WHERE backfilled=1")

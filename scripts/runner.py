@@ -289,7 +289,7 @@ def launch_acquisition(task_id, country="", log_dir=None):
     search_queries = [f"{k} {country}" if country else k for k in kws]
 
     def _run():
-        from core import finish_task, ingest_leads
+        from core import finish_task, ingest_leads, normalize_domain
 
         def run_step(step, argv):
             with open(log_path, "a", encoding="utf-8") as f:
@@ -334,6 +334,32 @@ def launch_acquisition(task_id, country="", log_dir=None):
             "--out", backfill_json, "--brands", BRANDS,
             "--deye", "Deye,Sunsynk,Sol-Ark,INGE,Fusion,OHm,Noark"])  # 正式跑全量模式（--fast 仅限测试，勿加回）
 
+        # 4.5 证据完整性闸门（2026-09-22 收编进正式流程，默认开启）
+        # 为什么要有这一步：backfill 抄不到证据就留空，score_leads 会按兜底给分，
+        # 「证据缺失」的线索会以正常分数悄悄入库（task_issues #14：1199 家落 58 分基线无人察觉）。
+        # references/qualification-rules.md §61-76 那套联网补证规则此前**代码里没有触发点**，
+        # 实测一次都没跑过（09-05 批 5 家正文是报错页的线索全部只标「未确认」，无一家补抓/补搜）。
+        # 本步只做「判定 + 出工作单」：不联网、不抓取、不写库 —— 补证手段（kitesurf / anysearch /
+        # WebSearch）是 agent 侧能力，脚本只负责说清「缺什么、该用什么手段、搜什么词」。
+        # 三态（默认出单，不改现有入库吞吐，但让证据缺口从此留痕、可审计）：
+        #   默认 / =1 / =on     出工作单到 work/evidence_gaps.json，缺口摘要写进任务日志，不阻断入库
+        #   =strict             有「正文不可用」的阻断级缺口则 exit 3，拒绝进入评分/入库
+        #   =0 / =off / =none  显式关闭本步（逃生阀：闸门自身出问题时用它绕过，无需改代码）
+        gate_mode = os.environ.get("ACQ_EVIDENCE_GATE", "1").strip().lower()
+        gaps_json = os.path.join(work, "evidence_gaps.json")
+        gate_rc = 0
+        if gate_mode in ("0", "off", "none"):
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write("\n===== 4.5 证据闸门(evidence_gate) =====\n"
+                        "  跳过：ACQ_EVIDENCE_GATE 显式关闭（=1 出工作单 / =strict 卡入库）\n")
+                f.flush()
+        else:
+            gate_argv = [PYTHON, os.path.join(SCRIPTS_DIR, "evidence_gate.py"),
+                         backfill_json, "--out", gaps_json, "--only-gaps"]
+            if gate_mode == "strict":
+                gate_argv.append("--strict")
+            gate_rc = run_step("4.5 证据闸门(evidence_gate)", gate_argv)
+
         # 5. 双模式评分 + 分级
         # 2026-09-22（task_issues #14）：rc 原先被丢掉，评分失败也照常入库 —— 而
         # scored_json 若是上一轮的残留文件就照样存在，「存在即入库」等于把过期分数灌进库。
@@ -353,13 +379,43 @@ def launch_acquisition(task_id, country="", log_dir=None):
                 f.write(f"[abort] 评分步骤 exit {rc_score}，跳过入库"
                         f"（避免把过期/缺失的评分产物灌进库）\n")
                 f.flush()
+            # 证据闸门条目级过滤（2026-09-24 改进 #1）：strict 模式下不再整批 abort，
+            # 而是剔除「正文不可用」的阻断条、好条照常入库。原先 exit 3 让整批 0 条入库，
+            # 对「1 条坏」和「359 条坏」是同一个信号。默认档（=1）本就不卡入库，此分支不触发。
+            blocked_domains = set()
+            if gate_rc == 3 and os.path.exists(gaps_json):
+                try:
+                    gaps = json.load(open(gaps_json, encoding="utf-8"))
+                    for r in gaps.get("records", []):
+                        if r.get("severity") == "blocking":
+                            d = normalize_domain(r.get("website"))
+                            if d:
+                                blocked_domains.add(d)
+                    f.write(f"[闸门] 阻断级 {len(blocked_domains)} 条（正文不可用）挂起不入库，好条照常入库\n")
+                    f.flush()
+                except Exception as e:
+                    # 读不到 gaps_json 就回退整批 abort，别把坏条当新鲜数据灌进库
+                    ok = False
+                    f.write(f"[闸门] 读 gaps_json 失败，回退整批 abort: {e}\n")
+                    f.flush()
             try:
                 if ok and os.path.exists(scored_json):
                     leads = json.load(open(scored_json, encoding="utf-8"))
                     if isinstance(leads, dict):
                         leads = leads.get("leads") or leads.get("results") or []
-                    if isinstance(leads, list) and leads:
-                        stats = ingest_leads(leads, task_id)
+                    if isinstance(leads, list):
+                        if blocked_domains:
+                            kept, blocked_n = [], 0
+                            for l in leads:
+                                if normalize_domain(l.get("website")) in blocked_domains:
+                                    blocked_n += 1
+                                    continue
+                                kept.append(l)
+                            f.write(f"[闸门] 剔除阻断条 {blocked_n}，待入库 {len(kept)} 条\n")
+                            f.flush()
+                            leads = kept
+                        if leads:
+                            stats = ingest_leads(leads, task_id)
                 f.write(json.dumps(stats, ensure_ascii=False) + "\n")
             except Exception as e:
                 ok = False
